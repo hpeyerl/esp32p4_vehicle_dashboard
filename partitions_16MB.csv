@@ -1,10 +1,19 @@
 # EV Dashboard — Partition Table
-# 16 MB flash  (128 Mbit)
-# Type:  app=0, data=1
-# SubType: factory=0, ota_0=16, nvs=2, phy=1, coredump=3
+# 16 MB flash (0x1000000 = 16,777,216 bytes)
 #
-# Name,     Type, SubType,  Offset,    Size,    Flags
+# Offset     Size        End              Contents
+# ─────────────────────────────────────────────────────────────────
+# 0x9000     0x6000      0xF000           nvs
+# 0xF000     0x1000      0x10000          phy_init
+# 0x10000    0xCF0000    0xD00000         factory app  (~13.0 MB)
+# 0xD00000   0x200000    0xF00000         splash image (2.0 MB RGB565)
+# 0xF00000   0x10000     0xF10000         coredump
+# ─────────────────────────────────────────────────────────────────
+# Total: 0xF10000 of 0x1000000 used (94%)
+#
+# Name,     Type, SubType,  Offset,    Size,
 nvs,        data, nvs,      0x9000,    0x6000,
 phy_init,   data, phy,      0xF000,    0x1000,
-factory,    app,  factory,  0x10000,   0xF00000,
-coredump,   data, coredump, 0xF10000,  0x10000,
+factory,    app,  factory,  0x10000,   0xCF0000,
+splash,     data, spiffs,   0xD00000,  0x200000,
+coredump,   data, coredump, 0xF00000,  0x10000,

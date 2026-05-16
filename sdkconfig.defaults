@@ -1,55 +1,53 @@
-#
-# sdkconfig.defaults
-# PlatformIO merges this into the generated sdkconfig at build time.
-# Place alongside platformio.ini in the project root.
-#
-# IMPORTANT: Kconfig does NOT allow inline comments on value lines.
-# Every value line must end immediately after the value — no # text.
-# Comments must be on their own lines starting with #.
-#
-# Tested against ESP-IDF 5.5.3 (framework-espidf 3.50503.0)
-# targeting ESP32-P4.
-#
+# sdkconfig.defaults - M5Stack Tab5 EV Dashboard
+# Based on M5Stack UserDemo platforms/tab5/sdkconfig.defaults
+# ESP-IDF 5.4.2
 
-# PSRAM
-# ESP32-P4 uses QSPI PSRAM (not Octal — SPIRAM_MODE_OCT does not exist on P4)
+CONFIG_IDF_TARGET="esp32p4"
+
+# Flash
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+
+# PSRAM - 32MB HEX at 200MHz (required to avoid DPI underrun)
 CONFIG_SPIRAM=y
-CONFIG_SPIRAM_SPEED_80M=y
-CONFIG_SPIRAM_USE_MALLOC=y
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
-CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_SPIRAM_XIP_FROM_PSRAM=y
 
-# TWAI (CAN)
-CONFIG_TWAI_ISR_IN_IRAM=y
+# Cache - larger L2 cache improves PSRAM DMA bandwidth for DPI
+CONFIG_IDF_EXPERIMENTAL_FEATURES=y
+CONFIG_CACHE_L2_CACHE_256KB=y
+CONFIG_CACHE_L2_CACHE_LINE_128B=y
 
 # FreeRTOS
 CONFIG_FREERTOS_HZ=1000
 CONFIG_FREERTOS_UNICORE=n
 
-# Stack sizes
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
-CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
+# Compiler
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# ESP32-P4 silicon revision (Tab5 v1.3 = ECO2, less than v3)
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+
+# TWAI (CAN)
+CONFIG_TWAI_ISR_IN_IRAM=y
+
+# I2C
+CONFIG_I2C_ISR_IRAM_SAFE=y
+
+# MIPI DSI
+CONFIG_LCD_DSI_ISR_CACHE_SAFE=y
 
 # Logging
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
-CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
 
-# MIPI DSI
-# Symbol was renamed in IDF 5.4+ — use the new name
-CONFIG_LCD_DSI_ISR_CACHE_SAFE=y
+# Brownout - lower threshold for USB power without battery
+CONFIG_ESP_BROWNOUT_DET_LVL_SEL_0=y
+CONFIG_ESP_BROWNOUT_DET_LVL=0
 
-# Compiler
-CONFIG_COMPILER_OPTIMIZATION_PERF=y
-CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_ENABLE=y
+# Disable task watchdog (ST7123 init takes time)
+CONFIG_ESP_TASK_WDT_EN=n
 
-# Flash size — must match board (16 MB)
-CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
-CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
-
-# ESP32-P4 silicon revision selection
-# REV_LESS_V3 uses split sram_low/sram_high memory regions in the linker script.
-# Without this, memory.ld uses sram_seg but sections.ld.in still references
-# sram_low/sram_high, causing linker errors. Set based on your actual chip revision:
-# - ESP32-P4 v0.x, v1.x, v2.x chips: set this to y
-# - ESP32-P4 v3+ chips: comment this out and set CONFIG_ESP32P4_SELECTS_REV_V3=y
-CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+# Stack sizes
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192

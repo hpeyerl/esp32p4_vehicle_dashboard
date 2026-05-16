@@ -16,7 +16,7 @@
 // -------------------------------------------------------------
 typedef struct {
     // --- Drivetrain ---
-    float   speed_mph;          // 0x257
+    float   speed;              // 0x257 — native units from CAN (MPH)
     float   power_kw;           // derived: pack_volts * pack_amps / 1000
 
     // --- Battery / BMS  (0x355, 0x356) ---
@@ -33,7 +33,7 @@ typedef struct {
     float   aux_volts;          // 0x210 bits 32-47
 
     // --- Derived ---
-    float   range_mi;           // soc_pct * RANGE_FULL_SOC_MILES / 100
+    float   range_dist;          // native units (mi), convert at display
 
     // --- Gear (placeholder — fill when CAN ID is known) ---
     //  0=P  1=R  2=N  3=D  4=B
@@ -142,7 +142,7 @@ static inline void parse_can_frame(uint32_t id, const uint8_t *data, uint32_t no
     //  0x257 — Vehicle Speed
     // ---------------------------------------------------------
     case CAN_ID_SPEED:
-        g_dash.speed_mph = can_signal(data,
+        g_dash.speed = can_signal(data,
             SIG_SPEED_START, SIG_SPEED_LEN,
             SIG_SPEED_SCALE, SIG_SPEED_OFFSET,
             SIG_SPEED_SIGNED);
@@ -161,7 +161,7 @@ static inline void parse_can_frame(uint32_t id, const uint8_t *data, uint32_t no
         if (g_dash.soc_pct > 100.0f) g_dash.soc_pct = 100.0f;
         if (g_dash.soc_pct <   0.0f) g_dash.soc_pct =   0.0f;
         // Derived range
-        g_dash.range_mi = g_dash.soc_pct * RANGE_FULL_SOC_MILES / 100.0f;
+        g_dash.range_dist = g_dash.soc_pct * RANGE_FULL_SOC_MILES / 100.0f;  // in native miles
         g_dash.last_ms_0x355 = now_ms;
         break;
 

@@ -1,0 +1,2 @@
+#!/bin/sh
+esptool.py --port /dev/ttyACM0 write_flash 0xD00000 evj55_splash.bin
