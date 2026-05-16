@@ -1,11 +1,12 @@
 // =============================================================
-//  EV Dashboard — Main Application
-//  Build system: PlatformIO + ESP-IDF framework
-//  Target:  M5Stack Tab5 (ESP32-P4)
-//  Display: 5" 1280×720 MIPI-DSI
-//           ILI9881C+GT911 (pre Oct 14 2025) or ST7123 (post)
-//  CAN:     TWAI + M5Stack IS3050G on GPIO_EXT connector
+//  main.cpp — EV Dashboard Application Entry Point
+//
+//  Target:  M5Stack Tab5 (ESP32-P4, ECO2/v1.3 silicon)
+//  Display: ST7123 5" MIPI-DSI 720×1280 portrait
+//           (LVGL landscape 1280×720, SW-rotated in flush cb)
+//  CAN:     TWAI 500 kbps via IS3050G on GPIO_EXT (TX=53, RX=54)
 //  UI:      LVGL v9
+//  IDF:     5.4.2 (pioarduino platform)
 // =============================================================
 
 #include <stdio.h>
@@ -23,131 +24,84 @@
 #include "can_signals.h"
 #include "can_parser.h"
 #include "dashboard_ui.h"
-#include "tab5_display.h"    // Tab5 DSI panel + touch init
-#include "splash_screen.h"
+#include "tab5_display.h"
 
 static const char *TAG = "ev_dash";
 
-// ─── Global DashData ───────────────────────────────────────────────────────
-DashData g_dash = {};
-static SemaphoreHandle_t g_dash_mutex = NULL;
-
-// ─── LVGL buffers ──────────────────────────────────────────────────────────
-static lv_display_t *g_disp = NULL;
-// LVGL draw buffers come from DPI panel framebuffers (see display_init)
-
-// ─── Pin definitions (set via platformio.ini build_flags) ─────────────────
+// ── TWAI pin defaults (override via platformio.ini build_flags) ───────────
 #ifndef TWAI_TX_PIN
   #define TWAI_TX_PIN  53
 #endif
 #ifndef TWAI_RX_PIN
   #define TWAI_RX_PIN  54
 #endif
-// LCD_H_RES and LCD_V_RES defined via platformio.ini build_flags (-DLCD_H_RES=720 -DLCD_V_RES=1280)
 
-// =============================================================
-//  TWAI (CAN) — 500 kbps
-//  M5Stack IS3050G connected to GPIO_EXT pins 53 (TX) / 54 (RX)
-// =============================================================
+// ── Globals ───────────────────────────────────────────────────────────────
+static lv_display_t      *g_disp       = NULL;
+static SemaphoreHandle_t  g_dash_mutex = NULL;
+
+// ── TWAI (CAN) init ───────────────────────────────────────────────────────
 static esp_err_t twai_init(void)
 {
-    const twai_general_config_t g_cfg = TWAI_GENERAL_CONFIG_DEFAULT(
-        (gpio_num_t)TWAI_TX_PIN,
-        (gpio_num_t)TWAI_RX_PIN,
-        TWAI_MODE_NORMAL
-    );
-    const twai_timing_config_t  t_cfg = TWAI_TIMING_CONFIG_500KBITS();
-    const twai_filter_config_t  f_cfg = TWAI_FILTER_CONFIG_ACCEPT_ALL();
+    const twai_general_config_t gcfg = TWAI_GENERAL_CONFIG_DEFAULT(
+        (gpio_num_t)TWAI_TX_PIN, (gpio_num_t)TWAI_RX_PIN, TWAI_MODE_NORMAL);
+    const twai_timing_config_t  tcfg = TWAI_TIMING_CONFIG_500KBITS();
+    const twai_filter_config_t  fcfg = TWAI_FILTER_CONFIG_ACCEPT_ALL();
 
-    ESP_ERROR_CHECK(twai_driver_install(&g_cfg, &t_cfg, &f_cfg));
+    ESP_ERROR_CHECK(twai_driver_install(&gcfg, &tcfg, &fcfg));
     ESP_ERROR_CHECK(twai_start());
-
     ESP_LOGI(TAG, "TWAI started  TX=GPIO%d  RX=GPIO%d  500 kbps",
              TWAI_TX_PIN, TWAI_RX_PIN);
     return ESP_OK;
 }
 
-// =============================================================
-//  CAN receive task — core 0, priority 10
-// =============================================================
+// ── CAN receive task (core 0, priority 10) ────────────────────────────────
 static void can_rx_task(void *arg)
 {
     twai_message_t msg;
-
     while (1) {
-        esp_err_t ret = twai_receive(&msg, pdMS_TO_TICKS(100));
-        if (ret == ESP_OK) {
-            uint8_t data[8] = {0};
-            uint8_t dlc = msg.data_length_code;
-            if (dlc > 8) dlc = 8;
+        if (twai_receive(&msg, pdMS_TO_TICKS(100)) == ESP_OK) {
+            uint8_t data[8] = {};
+            uint8_t dlc = msg.data_length_code < 8 ? msg.data_length_code : 8;
             memcpy(data, msg.data, dlc);
-
             uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
-
             xSemaphoreTake(g_dash_mutex, portMAX_DELAY);
             parse_can_frame(msg.identifier, data, now_ms);
             xSemaphoreGive(g_dash_mutex);
-
-#ifdef DASHBOARD_DEBUG_CAN
-            ESP_LOGD(TAG, "CAN 0x%03lX [%02X %02X %02X %02X %02X %02X %02X %02X]",
-                     (unsigned long)msg.identifier,
-                     data[0],data[1],data[2],data[3],
-                     data[4],data[5],data[6],data[7]);
-#endif
         }
     }
 }
 
-// =============================================================
-//  Display + LVGL init
-// =============================================================
+// ── Display + LVGL init ───────────────────────────────────────────────────
 static void display_init(void)
 {
-    ESP_LOGI(TAG, "display_init: lv_init...");
     lv_init();
 
-    ESP_LOGI(TAG, "display_init: calling tab5_display_init...");
-    esp_err_t ret = tab5_display_init(&g_disp);
-    ESP_LOGI(TAG, "display_init: tab5_display_init returned: %s", esp_err_to_name(ret));
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "display_init FAILED — aborting");
-        abort();
-    }
+    ESP_ERROR_CHECK(tab5_display_init(&g_disp));
 
-    // LVGL renders landscape 1280x720 RGB565 into these buffers.
-    // flush cb software-rotates to portrait 720x1280 before sending to DPI panel.
+    // LVGL renders landscape 1280×720 RGB565.
+    // The flush callback SW-rotates 90° CCW into the DPI panel's
+    // double framebuffers (720×1280 portrait, internal SRAM).
     size_t buf_bytes = (size_t)LCD_H_RES * LCD_V_RES * sizeof(uint16_t);
-    void *lvgl_buf1 = heap_caps_malloc(buf_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    void *lvgl_buf2 = heap_caps_malloc(buf_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!lvgl_buf1 || !lvgl_buf2) {
-        ESP_LOGE(TAG, "LVGL buffer alloc failed");
-        abort();
-    }
-    ESP_LOGI(TAG, "LVGL bufs: %p %p  %zu bytes each", lvgl_buf1, lvgl_buf2, buf_bytes);
+    void *buf1 = heap_caps_malloc(buf_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    void *buf2 = heap_caps_malloc(buf_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf1 || !buf2) { ESP_LOGE(TAG, "LVGL buf alloc failed"); abort(); }
 
     lv_display_set_color_format(g_disp, LV_COLOR_FORMAT_RGB565);
-    lv_display_set_buffers(g_disp, lvgl_buf1, lvgl_buf2, buf_bytes,
+    lv_display_set_buffers(g_disp, buf1, buf2, buf_bytes,
                            LV_DISPLAY_RENDER_MODE_FULL);
 
-    ESP_LOGI(TAG, "display_init complete  %dx%d landscape -> 720x1280 portrait via SW rotate",
-             LCD_H_RES, LCD_V_RES);
+    ESP_LOGI(TAG, "display_init complete  %d×%d  buf=%zu B ×2 (PSRAM)",
+             LCD_H_RES, LCD_V_RES, buf_bytes);
 }
 
-// =============================================================
-//  UI task — core 1, priority 5, ~30 fps
-// =============================================================
+// ── UI task (core 1, priority 5) ─────────────────────────────────────────
 static void ui_task(void *arg)
 {
-    // Splash disabled — LVGL style alloc crash under investigation
-    // splash_show(g_disp);
-    // vTaskDelay(pdMS_TO_TICKS(SPLASH_DURATION_MS));
-    // splash_hide();
-
-    // Build main dashboard
     dashboard_ui_create(g_disp);
 
+    const TickType_t period = pdMS_TO_TICKS(66);  // ~15 fps
     TickType_t last_wake = xTaskGetTickCount();
-    const TickType_t period = pdMS_TO_TICKS(66);  // ~15 fps — avoids DPI underrun
 
     while (1) {
         DashData snap;
@@ -162,18 +116,17 @@ static void ui_task(void *arg)
     }
 }
 
-// =============================================================
-//  app_main
-// =============================================================
+// ── Entry point ───────────────────────────────────────────────────────────
 extern "C" void app_main(void)
 {
-    ESP_LOGI(TAG, "EV Dashboard booting on M5Stack Tab5");
-    ESP_LOGI(TAG, "IDF: %s  Display: %s",
+    ESP_LOGI(TAG, "EV Dashboard — M5Stack Tab5");
+    ESP_LOGI(TAG, "IDF %s  |  display: %s  |  units: %s",
              esp_get_idf_version(),
-             TAB5_DISPLAY_ILI9881C ? "ILI9881C+GT911" : "ST7123");
+             TAB5_DISPLAY_ILI9881C ? "ILI9881C" : "ST7123",
+             UNITS_SPEED_LABEL);
 
     g_dash_mutex = xSemaphoreCreateMutex();
-    if (!g_dash_mutex) { ESP_LOGE(TAG, "Mutex create failed"); abort(); }
+    if (!g_dash_mutex) { ESP_LOGE(TAG, "mutex create failed"); abort(); }
 
     display_init();
     twai_init();
@@ -181,5 +134,5 @@ extern "C" void app_main(void)
     xTaskCreatePinnedToCore(can_rx_task, "can_rx", 4096,  NULL, 10, NULL, 0);
     xTaskCreatePinnedToCore(ui_task,     "ui",     12288, NULL,  5, NULL, 1);
 
-    ESP_LOGI(TAG, "Tasks running.");
+    ESP_LOGI(TAG, "tasks running");
 }
