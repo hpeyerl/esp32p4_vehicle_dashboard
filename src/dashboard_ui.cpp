@@ -42,8 +42,8 @@
 #define LEFT_W   260    // thermal sidebar width (px)
 #define RIGHT_W  240    // efficiency/image sidebar width (px)
 #define BAR_W     48    // bar graph stroke width (px)
-#define BAR_H    640    // bar graph height — nearly full screen height
-#define BAR_TOP   14    // bar top y offset from screen top (px)
+#define BAR_H    580    // bar graph height
+#define BAR_TOP   50    // bar top y offset — room for labels above
 #define BOT_H      0    // status bar removed
 
 // Power bar full-scale (kW each direction)
@@ -386,7 +386,7 @@ void dashboard_ui_update(const DashData *d)
     auto uptemp = [](lv_obj_t *lbl, float v, float warn, float crit,
                      lv_color_t *last_col) {
         char b[12];
-        snprintf(b, sizeof(b), "%.0fÂ°""C", v);
+        snprintf(b, sizeof(b), "%.0f C", v);
         lv_label_set_text(lbl, b);
         lv_color_t nc = v >= crit ? CLR_RED : v >= warn ? CLR_AMBER : CLR_GREEN;
         if (memcmp(&nc, last_col, sizeof(lv_color_t)) != 0) {
@@ -410,7 +410,7 @@ void dashboard_ui_update(const DashData *d)
     if (d->speed > 2.0f && d->power_kw > 5.0f) {
         snprintf(buf, sizeof(buf), "%.1f", EFF_TO_DISPLAY(d->speed / d->power_kw));
     } else {
-        snprintf(buf, sizeof(buf), "\xe2\x80\x94");  // em dash
+        snprintf(buf, sizeof(buf), "--");
     }
     lv_label_set_text(s_lbl_efficiency, buf);
 
