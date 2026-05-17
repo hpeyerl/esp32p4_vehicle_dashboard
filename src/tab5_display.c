@@ -16,7 +16,7 @@
 //  LVGL integration:
 //    - LVGL sees 1280×720 landscape
 //    - Flush callback SW-rotates 90° CCW into DPI double framebuffers
-//    - on_color_trans_done semaphore prevents overwriting active buffer
+//    - on_refresh_done ISR calls lv_display_flush_ready at vsync
 // =============================================================
 
 #include "tab5_display.h"
@@ -79,14 +79,13 @@ static i2c_master_dev_handle_t  s_pi4ioe1     = NULL;
 static esp_lcd_dsi_bus_handle_t s_dsi_bus     = NULL;
 static esp_ldo_channel_handle_t s_ldo         = NULL;
 static ppa_client_handle_t      s_ppa         = NULL;
-static lv_display_t            *s_lvgl_disp   = NULL;
 
 // Called from DPI ISR at vsync — signals LVGL flush complete
 static bool IRAM_ATTR prv_dpi_trans_done_cb(esp_lcd_panel_handle_t panel,
                                              esp_lcd_dpi_panel_event_data_t *edata,
                                              void *user_ctx)
 {
-    lv_display_flush_ready(s_lvgl_disp);
+    lv_display_flush_ready((lv_display_t *)user_ctx);
     return false;
 }
 
@@ -141,50 +140,10 @@ static const st7123_lcd_init_cmd_t s_st7123_init_cmds[] = {
     {0x35, (uint8_t[]){0x00}, 1, 100}, // Tearing effect line on
 };
 
-// ── PPA hardware rotation: landscape 1280×720 → portrait 720×1280 ─────────
-// Uses ESP32-P4 PPA SRM (Scale/Rotate/Mirror) engine — no CPU pixel loop.
-// Input:  LVGL PSRAM buffer [RGB565, 1280×720]
-// Output: DPI framebuffer   [RGB565,  720×1280] (internal SRAM, DMA-safe)
-// 90° CCW = PPA_SRM_ROTATION_ANGLE_270
-static void prv_ppa_rotate(const void *src, void *dst,
-                             uint16_t src_w, uint16_t src_h)
-{
-    // Writeback PSRAM cache so PPA DMA sees current pixel data
-    esp_cache_msync((void *)src,
-                    (size_t)src_w * src_h * sizeof(uint16_t),
-                    ESP_CACHE_MSYNC_FLAG_DIR_C2M);
-
-    ppa_srm_oper_config_t cfg = {
-        .in.buffer          = src,
-        .in.pic_w           = src_w,
-        .in.pic_h           = src_h,
-        .in.block_w         = src_w,
-        .in.block_h         = src_h,
-        .in.block_offset_x  = 0,
-        .in.block_offset_y  = 0,
-        .in.srm_cm          = PPA_SRM_COLOR_MODE_RGB565,
-        .out.buffer         = dst,
-        .out.buffer_size    = (size_t)src_w * src_h * sizeof(uint16_t),
-        .out.pic_w          = src_h,   // portrait width  = landscape height
-        .out.pic_h          = src_w,   // portrait height = landscape width
-        .out.block_offset_x = 0,
-        .out.block_offset_y = 0,
-        .out.srm_cm         = PPA_SRM_COLOR_MODE_RGB565,
-        .rotation_angle     = PPA_SRM_ROTATION_ANGLE_90,
-        .scale_x            = 1.0f,
-        .scale_y            = 1.0f,
-        .rgb_swap           = 0,
-        .byte_swap          = 0,
-        .mode               = PPA_TRANS_MODE_BLOCKING,
-    };
-
-    ESP_ERROR_CHECK(ppa_do_scale_rotate_mirror(s_ppa, &cfg));
-}
-
 // ── LVGL flush callback ───────────────────────────────────────────────────
 // PPA rotates LVGL landscape buffer → portrait rotation buffer.
-// draw_bitmap triggers DMA to the panel.
-// on_color_trans_done ISR calls lv_display_flush_ready when DMA completes.
+// draw_bitmap triggers DPI scan of the new frame.
+// on_refresh_done ISR calls lv_display_flush_ready at next vsync.
 static void prv_lvgl_flush_cb(lv_display_t *disp,
                                const lv_area_t *area,
                                uint8_t *px_map)
@@ -235,7 +194,7 @@ static void prv_lvgl_flush_cb(lv_display_t *disp,
 
     // PPA output is in s_rot_buf — send directly to panel
     esp_lcd_panel_draw_bitmap(s_panel, 0, 0, 720, 1280, s_rot_buf);
-    // flush_ready called from on_color_trans_done ISR
+    // flush_ready called from on_refresh_done ISR at next vsync
 }
 
 // ── LVGL touch callback ───────────────────────────────────────────────────
@@ -486,15 +445,14 @@ esp_err_t tab5_display_init(lv_display_t **disp_out)
     ESP_LOGI(TAG, "init: LVGL display %d×%d", LCD_H_RES, LCD_V_RES);
     lv_display_t *disp = lv_display_create(LCD_H_RES, LCD_V_RES);
     lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565);
-    s_lvgl_disp = disp;
     lv_display_set_flush_cb(disp, prv_lvgl_flush_cb);
     // Register on_refresh_done — fires at vsync with num_fbs=2
     esp_lcd_dpi_panel_event_callbacks_t dpi_cbs = {
         .on_refresh_done = prv_dpi_trans_done_cb,
     };
     ESP_ERROR_CHECK(
-        esp_lcd_dpi_panel_register_event_callbacks(s_panel, &dpi_cbs, NULL));
-    ESP_LOGI(TAG, "DPI on_refresh_done + flush_wait_cb registered");
+        esp_lcd_dpi_panel_register_event_callbacks(s_panel, &dpi_cbs, disp));
+    ESP_LOGI(TAG, "DPI on_refresh_done registered");
 
     lv_indev_t *indev = lv_indev_create();
     lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);

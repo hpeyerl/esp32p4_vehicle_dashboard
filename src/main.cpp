@@ -101,9 +101,7 @@ static void display_init(void)
 // ── UI task (core 1, priority 5) ─────────────────────────────────────────
 static void ui_task(void *arg)
 {
-    ESP_LOGI(TAG, "ui_task: creating dashboard UI...");
     dashboard_ui_create(g_disp);
-    ESP_LOGI(TAG, "ui_task: dashboard_ui_create done, entering loop");
 
     const TickType_t period = pdMS_TO_TICKS(66);  // ~15 fps
     TickType_t last_wake = xTaskGetTickCount();
@@ -114,12 +112,6 @@ static void ui_task(void *arg)
         xSemaphoreTake(g_dash_mutex, portMAX_DELAY);
         memcpy(&snap, &g_dash, sizeof(DashData));
         xSemaphoreGive(g_dash_mutex);
-
-        if (frame < 5 || (frame % 150) == 0) {
-            ESP_LOGI(TAG, "ui frame %lu: soc=%.1f spd=%.1f kw=%.1f gear=%d",
-                     (unsigned long)frame,
-                     snap.soc_pct, snap.speed, snap.power_kw, snap.gear);
-        }
 
 #if SIM_DATA
         // Synthesize changing data for display testing — no CAN bus needed
@@ -145,9 +137,9 @@ static void ui_task(void *arg)
         if (memcmp(&snap, &last_snap, sizeof(DashData)) != 0) {
             dashboard_ui_update(&snap);
             last_snap = snap;
-            lv_refr_now(g_disp);  // force immediate refresh when data changes
+            lv_refr_now(g_disp);
         } else {
-            lv_timer_handler();   // normal timer processing when idle
+            lv_timer_handler();
         }
 
         ESP_LOGD(TAG, "frame %lu: done", (unsigned long)frame);
