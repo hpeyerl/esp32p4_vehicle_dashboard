@@ -10,6 +10,7 @@
 // =============================================================
 
 #include <stdio.h>
+#include <math.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -25,6 +26,7 @@
 #include "can_parser.h"
 #include "dashboard_ui.h"
 #include "tab5_display.h"
+#include "units.h"
 
 static const char *TAG = "ev_dash";
 
@@ -83,8 +85,9 @@ static void display_init(void)
     // The flush callback SW-rotates 90° CCW into the DPI panel's
     // double framebuffers (720×1280 portrait, internal SRAM).
     size_t buf_bytes = (size_t)LCD_H_RES * LCD_V_RES * sizeof(uint16_t);
-    void *buf1 = heap_caps_malloc(buf_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    void *buf2 = heap_caps_malloc(buf_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    // PPA requires 128-byte cache-line alignment on PSRAM buffers
+    void *buf1 = heap_caps_aligned_alloc(128, buf_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    void *buf2 = heap_caps_aligned_alloc(128, buf_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!buf1 || !buf2) { ESP_LOGE(TAG, "LVGL buf alloc failed"); abort(); }
 
     lv_display_set_color_format(g_disp, LV_COLOR_FORMAT_RGB565);
@@ -98,10 +101,13 @@ static void display_init(void)
 // ── UI task (core 1, priority 5) ─────────────────────────────────────────
 static void ui_task(void *arg)
 {
+    ESP_LOGI(TAG, "ui_task: creating dashboard UI...");
     dashboard_ui_create(g_disp);
+    ESP_LOGI(TAG, "ui_task: dashboard_ui_create done, entering loop");
 
     const TickType_t period = pdMS_TO_TICKS(66);  // ~15 fps
     TickType_t last_wake = xTaskGetTickCount();
+    uint32_t frame = 0;
 
     while (1) {
         DashData snap;
@@ -109,8 +115,43 @@ static void ui_task(void *arg)
         memcpy(&snap, &g_dash, sizeof(DashData));
         xSemaphoreGive(g_dash_mutex);
 
-        dashboard_ui_update(&snap);
-        lv_timer_handler();
+        if (frame < 5 || (frame % 150) == 0) {
+            ESP_LOGI(TAG, "ui frame %lu: soc=%.1f spd=%.1f kw=%.1f gear=%d",
+                     (unsigned long)frame,
+                     snap.soc_pct, snap.speed, snap.power_kw, snap.gear);
+        }
+
+#if SIM_DATA
+        // Synthesize changing data for display testing — no CAN bus needed
+        {
+            static float t = 0.0f;
+            t += 0.05f;
+            snap.soc_pct       = 50.0f + 45.0f * sinf(t * 0.3f);
+            snap.speed         = 60.0f + 50.0f * sinf(t * 0.7f);
+            snap.power_kw      = 150.0f * sinf(t * 1.1f);
+            snap.pack_volts    = 390.0f + 10.0f * sinf(t * 0.2f);
+            snap.pack_amps     = snap.power_kw * 1000.0f / snap.pack_volts;
+            snap.inverter_temp_c = 40.0f + 20.0f * sinf(t * 0.15f);
+            snap.motor_temp_c    = 60.0f + 30.0f * sinf(t * 0.2f);
+            snap.batt_temp_c     = 25.0f + 10.0f * sinf(t * 0.1f);
+            snap.aux_volts     = 13.5f + 0.5f * sinf(t * 0.4f);
+            snap.range_dist    = snap.soc_pct * 2.5f;
+            snap.gear          = 3;  // D
+        }
+#endif
+        // Only update widgets when data has changed — lets LVGL dirty tracking
+        // work naturally. No change = no dirty widgets = no flush = no wasted CPU.
+        static DashData last_snap = {};
+        if (memcmp(&snap, &last_snap, sizeof(DashData)) != 0) {
+            dashboard_ui_update(&snap);
+            last_snap = snap;
+            lv_refr_now(g_disp);  // force immediate refresh when data changes
+        } else {
+            lv_timer_handler();   // normal timer processing when idle
+        }
+
+        ESP_LOGD(TAG, "frame %lu: done", (unsigned long)frame);
+        frame++;
 
         vTaskDelayUntil(&last_wake, period);
     }
