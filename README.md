@@ -1,5 +1,9 @@
 # EV Dashboard — M5Stack Tab5 Port
 
+An EV Dashboard for ESP32-P4 based board with MIPI-DSI.  Currently ported to M5 Tab5 for testing.  Later ports to another display like WaveShare 10.1 or maybe a Riverdi 10.1.
+
+CAN messages are currently configured for ZombieVerter VCU.
+
 ## What changed from the Waveshare build
 
 | Item | Waveshare build | Tab5 build |
