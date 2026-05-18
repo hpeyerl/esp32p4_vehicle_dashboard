@@ -14,8 +14,8 @@
 //
 //  Left/right panels have large inner border-radius for bracket effect.
 //  Meter gauges: half-circle arc + colored zone arcs + needle line.
-//  SOC bar: vertical, fills bottom→top. cyan≥50% amber 21-49% red≤20%.
-//  Power bar: vertical, zero center. orange=drive, green=regen.
+//  SOC arc:   "(" shape left of speed. fills CW. cyan≥50% amber 21-49% red≤20%.
+//  Power arc: ")" shape right of speed. zero=center, orange=drive, green=regen.
 // =============================================================
 
 #include "dashboard_ui.h"
@@ -43,11 +43,8 @@ LV_FONT_DECLARE(lv_font_montserrat_72)
 #define CLR_ORANGE      lv_color_hex(0xF59E0B)
 
 // ── Layout ────────────────────────────────────────────────────────────────
-#define LEFT_W    500    // left panel width
+#define LEFT_W    380    // left panel width
 #define RIGHT_W   280    // right panel width
-#define BAR_W      22    // bar width
-#define BAR_H     400    // bar height
-#define BAR_TOP    50    // bar top y
 #define BOT_H      52    // bottom bar height
 #define PWR_FULL   200.0f
 
@@ -82,15 +79,14 @@ static lv_obj_t *s_lbl_range   = NULL;
 static lv_obj_t *s_bar_pwr     = NULL;
 static lv_obj_t *s_lbl_pwr_val = NULL;
 static lv_obj_t *s_lbl_speed   = NULL;
-static lv_obj_t *s_lbl_gear    = NULL;
-static lv_obj_t *s_lbl_prnd[5];
+static lv_obj_t *s_lbl_prnd[4];
+static lv_obj_t *s_lbl_cruise    = NULL;  // cruise speed target
+static lv_obj_t *s_lbl_cruise_st = NULL;  // CC / SET / RES indicator
 static lv_obj_t *s_lbl_eff     = NULL;
 static lv_obj_t *s_lbl_trip    = NULL;
 static lv_obj_t *s_lbl_aux_v   = NULL;
 static lv_obj_t *s_dot_can     = NULL;
 
-static lv_coord_t s_soc_bar_x  = 0;
-static lv_coord_t s_pwr_bar_x  = 0;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 static lv_obj_t *make_label(lv_obj_t *parent, const char *txt,
@@ -266,22 +262,15 @@ void dashboard_ui_create(lv_display_t *disp)
 
     const lv_coord_t W      = LCD_H_RES;
     const lv_coord_t H      = LCD_V_RES;
-    const lv_coord_t MAIN_H = H - BOT_H;
+    const lv_coord_t MAIN_H = H;
 
-    s_soc_bar_x = LEFT_W;
-    s_pwr_bar_x = W - RIGHT_W - BAR_W;
-    const lv_coord_t CTR_X  = s_soc_bar_x + BAR_W + 10;
-    const lv_coord_t CTR_W  = s_pwr_bar_x - CTR_X;
 
     // ── Left panel — bracket shape via radius on inner-top and inner-bottom corners
     lv_obj_t *left = lv_obj_create(scr);
     lv_obj_set_pos(left, 0, 0);
     lv_obj_set_size(left, LEFT_W, MAIN_H);
-    lv_obj_set_style_bg_color(left, CLR_PANEL, 0);
-    lv_obj_set_style_bg_opa(left, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(left, CLR_BORDER, 0);
-    lv_obj_set_style_border_width(left, 1, 0);
-    lv_obj_set_style_border_side(left, LV_BORDER_SIDE_RIGHT, 0);
+    lv_obj_set_style_bg_opa(left, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(left, 0, 0);
     lv_obj_set_style_radius(left, 0, 0);
     // Bracket curve: large radius on right side
     lv_obj_set_style_pad_all(left, 0, 0);
@@ -314,35 +303,69 @@ void dashboard_ui_create(lv_display_t *disp)
     lv_obj_set_style_arc_color(s_pa_meter.arc_yellow, CLR_ORANGE, LV_PART_MAIN);
     lv_obj_set_style_arc_color(s_pa_meter.arc_yellow, CLR_ORANGE, LV_PART_INDICATOR);
 
-    // ── SOC bar ───────────────────────────────────────────────────────────
-    // Track
-    lv_obj_t *soc_track = make_rect(scr, s_soc_bar_x, BAR_TOP,
-                                     BAR_W, BAR_H, CLR_BORDER, 3);
-    (void)soc_track;
-    // Fill
-    s_bar_soc = make_rect(scr, s_soc_bar_x, BAR_TOP + BAR_H,
-                           BAR_W, 0, CLR_CYAN, 3);
+    // ── SOC arc — "(" shape ───────────────────────────────────────────────
+    // Arc center is placed to the RIGHT of left panel edge so only the
+    // left-curving inner portion is visible on screen.
+    // LVGL arc: 0=right/3-o'clock, goes CW. 
+    // For a "(" shape we need the arc to sweep from ~top-left to bottom-left.
+    // Center at (LEFT_W + ARC_R, MAIN_H/2), radius ARC_R.
+    // Sweep from 120° to 240° (CW) = left-facing 120° arc.
+    // 50% thicker than SVG sketch: stroke width = 21
+    #define ARC_R      300   // arc radius
+    #define ARC_W       21   // arc stroke width (50% thicker)
+    #define ARC_START  120   // start angle (degrees, LVGL convention)
+    #define ARC_END    240   // end angle
 
-    lv_obj_t *soc_top = make_label(scr, "100%", CLR_TEXT_DIM,
-                                    &lv_font_montserrat_10);
-    lv_obj_align(soc_top, LV_ALIGN_TOP_LEFT, s_soc_bar_x - 2, BAR_TOP - 14);
+    lv_coord_t soc_cx = LEFT_W + ARC_R;    // center x — off right edge of left panel
+    lv_coord_t soc_cy = MAIN_H / 2;         // center y — vertical midpoint
 
+    // SOC track (gray outline)
+    lv_obj_t *soc_track = lv_arc_create(scr);
+    lv_obj_set_size(soc_track, ARC_R * 2, ARC_R * 2);
+    lv_obj_set_pos(soc_track, soc_cx - ARC_R, soc_cy - ARC_R);
+    lv_arc_set_bg_angles(soc_track, ARC_START, ARC_END);
+    lv_arc_set_angles(soc_track, ARC_START, ARC_START);  // empty fill
+    lv_obj_set_style_arc_color(soc_track, CLR_BORDER, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(soc_track, CLR_BORDER, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(soc_track, ARC_W, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(soc_track, ARC_W, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(soc_track, LV_OPA_TRANSP, 0);
+    lv_obj_remove_style(soc_track, NULL, LV_PART_KNOB);
+    lv_obj_clear_flag(soc_track, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(soc_track, LV_OBJ_FLAG_SCROLLABLE);
+
+    // SOC fill arc — same position, fill updates with SOC value
+    s_bar_soc = lv_arc_create(scr);
+    lv_obj_set_size(s_bar_soc, ARC_R * 2, ARC_R * 2);
+    lv_obj_set_pos(s_bar_soc, soc_cx - ARC_R, soc_cy - ARC_R);
+    lv_arc_set_bg_angles(s_bar_soc, ARC_START, ARC_END);
+    lv_arc_set_angles(s_bar_soc, ARC_START, ARC_START);  // starts empty
+    lv_obj_set_style_arc_color(s_bar_soc, CLR_BORDER, LV_PART_MAIN);  // bg transparent
+    lv_obj_set_style_arc_color(s_bar_soc, CLR_CYAN, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(s_bar_soc, ARC_W, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(s_bar_soc, ARC_W, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(s_bar_soc, LV_OPA_TRANSP, 0);
+    lv_obj_remove_style(s_bar_soc, NULL, LV_PART_KNOB);
+    lv_obj_clear_flag(s_bar_soc, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(s_bar_soc, LV_OBJ_FLAG_SCROLLABLE);
+
+    // SOC labels — positioned near the arc endpoints
     s_lbl_soc_pct = make_label(scr, "0%", CLR_CYAN, &lv_font_montserrat_14);
-    lv_obj_align(s_lbl_soc_pct, LV_ALIGN_TOP_LEFT,
-                 s_soc_bar_x - 2, BAR_TOP + BAR_H + 4);
-
+    lv_obj_set_pos(s_lbl_soc_pct, LEFT_W + 8, MAIN_H / 2 + ARC_R * 7/10);
     s_lbl_range = make_label(scr, "--", CLR_TEXT_BRIGHT, &lv_font_montserrat_10);
-    lv_obj_align(s_lbl_range, LV_ALIGN_TOP_LEFT,
-                 s_soc_bar_x - 2, BAR_TOP - 26);
+    lv_obj_set_pos(s_lbl_range, LEFT_W + 8, MAIN_H / 2 - ARC_R * 7/10 - 16);
 
     // ── Center ────────────────────────────────────────────────────────────
+    const lv_coord_t CTR_X  = LEFT_W + 30;
+    const lv_coord_t CTR_W  = W - RIGHT_W - 30 - CTR_X;
     lv_obj_t *ctr = lv_obj_create(scr);
     lv_obj_set_pos(ctr, CTR_X, 0);
     lv_obj_set_size(ctr, CTR_W, MAIN_H);
-    lv_obj_set_style_bg_color(ctr, CLR_BG, 0);
+    lv_obj_set_style_bg_opa(ctr, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(ctr, 0, 0);
     lv_obj_set_style_radius(ctr, 0, 0);
     lv_obj_clear_flag(ctr, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(ctr, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
 
     lv_obj_t *spd_lbl = make_label(ctr, "SPEED", CLR_TEXT_DIM,
                                     &lv_font_montserrat_14);
@@ -362,50 +385,78 @@ void dashboard_ui_create(lv_display_t *disp)
     lv_obj_set_style_border_width(gdiv, 0, 0);
     lv_obj_align(gdiv, LV_ALIGN_CENTER, 0, 60);
 
-    s_lbl_gear = make_label(ctr, "P", CLR_CYAN, &lv_font_montserrat_48);
-    lv_obj_align(s_lbl_gear, LV_ALIGN_BOTTOM_MID, 0, -88);
-
-    const char *gnames[] = {"P","R","N","D","B"};
-    for (int i = 0; i < 5; i++) {
+    const char *gnames[] = {"P","R","N","D"};
+    for (int i = 0; i < 4; i++) {
         s_lbl_prnd[i] = make_label(ctr, gnames[i], CLR_TEXT_DIM,
-                                    &lv_font_montserrat_18);
+                                    &lv_font_montserrat_24);
         lv_obj_align(s_lbl_prnd[i], LV_ALIGN_BOTTOM_MID,
-                     -96 + i * 48, -46);
+                     -72 + i * 48, -36);
     }
     lv_obj_set_style_text_color(s_lbl_prnd[0], CLR_CYAN, 0);
 
-    // ── Power bar ─────────────────────────────────────────────────────────
-    make_rect(scr, s_pwr_bar_x, BAR_TOP, BAR_W, BAR_H, CLR_BORDER, 3);
-    s_bar_pwr = make_rect(scr, s_pwr_bar_x, BAR_TOP + BAR_H/2,
-                           BAR_W, 0, CLR_ORANGE, 3);
+    // Cruise indicator — sits above PRND row, hidden until active
+    s_lbl_cruise_st = make_label(ctr, "", CLR_TEXT_DIM,
+                                  &lv_font_montserrat_14);
+    lv_obj_align(s_lbl_cruise_st, LV_ALIGN_BOTTOM_MID, -40, -70);
 
-    // Zero line
-    lv_obj_t *zero = make_rect(scr, s_pwr_bar_x - 4, BAR_TOP + BAR_H/2,
-                                BAR_W + 4, 2, CLR_TEXT_MID, 0);
-    (void)zero;
+    s_lbl_cruise = make_label(ctr, "", CLR_CYAN,
+                               &lv_font_montserrat_24);
+    lv_obj_align(s_lbl_cruise, LV_ALIGN_BOTTOM_MID, 20, -66);
 
-    lv_obj_t *kw_top = make_label(scr, "+200", CLR_AMBER,
-                                   &lv_font_montserrat_10);
-    lv_obj_align(kw_top, LV_ALIGN_TOP_LEFT,
-                 s_pwr_bar_x, BAR_TOP - 14);
+    // ── Power arc — ")" shape ─────────────────────────────────────────────
+    // Mirror of SOC arc. Center to the LEFT of right panel edge.
+    // Sweep from 300° to 60° (CW) = right-facing 120° arc.
+    #define PWR_ARC_START  300
+    #define PWR_ARC_END     60
 
+    lv_coord_t pwr_cx = W - RIGHT_W - ARC_R;
+    lv_coord_t pwr_cy = MAIN_H / 2;
+
+    // Power track (gray)
+    lv_obj_t *pwr_track = lv_arc_create(scr);
+    lv_obj_set_size(pwr_track, ARC_R * 2, ARC_R * 2);
+    lv_obj_set_pos(pwr_track, pwr_cx - ARC_R, pwr_cy - ARC_R);
+    lv_arc_set_bg_angles(pwr_track, PWR_ARC_START, PWR_ARC_END);
+    lv_arc_set_angles(pwr_track, PWR_ARC_START, PWR_ARC_START);
+    lv_obj_set_style_arc_color(pwr_track, CLR_BORDER, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(pwr_track, CLR_BORDER, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(pwr_track, ARC_W, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(pwr_track, ARC_W, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(pwr_track, LV_OPA_TRANSP, 0);
+    lv_obj_remove_style(pwr_track, NULL, LV_PART_KNOB);
+    lv_obj_clear_flag(pwr_track, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(pwr_track, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Power fill arc
+    s_bar_pwr = lv_arc_create(scr);
+    lv_obj_set_size(s_bar_pwr, ARC_R * 2, ARC_R * 2);
+    lv_obj_set_pos(s_bar_pwr, pwr_cx - ARC_R, pwr_cy - ARC_R);
+    lv_arc_set_bg_angles(s_bar_pwr, PWR_ARC_START, PWR_ARC_END);
+    lv_arc_set_angles(s_bar_pwr, PWR_ARC_START, PWR_ARC_START);
+    lv_obj_set_style_arc_color(s_bar_pwr, CLR_BORDER, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(s_bar_pwr, CLR_ORANGE, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(s_bar_pwr, ARC_W, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(s_bar_pwr, ARC_W, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(s_bar_pwr, LV_OPA_TRANSP, 0);
+    lv_obj_remove_style(s_bar_pwr, NULL, LV_PART_KNOB);
+    lv_obj_clear_flag(s_bar_pwr, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(s_bar_pwr, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Power labels
+    s_lbl_pwr_val = make_label(scr, "+0", CLR_ORANGE, &lv_font_montserrat_14);
+    lv_obj_set_pos(s_lbl_pwr_val,
+                   W - RIGHT_W - 50, MAIN_H / 2 + ARC_R * 7/10);
     lv_obj_t *kw_hdr = make_label(scr, "kW", CLR_TEXT_DIM,
                                    &lv_font_montserrat_10);
-    lv_obj_align(kw_hdr, LV_ALIGN_TOP_LEFT, s_pwr_bar_x + 2, BAR_TOP - 26);
-
-    s_lbl_pwr_val = make_label(scr, "+0", CLR_ORANGE, &lv_font_montserrat_14);
-    lv_obj_align(s_lbl_pwr_val, LV_ALIGN_TOP_LEFT,
-                 s_pwr_bar_x, BAR_TOP + BAR_H + 4);
+    lv_obj_set_pos(kw_hdr, W - RIGHT_W - 44,
+                   MAIN_H / 2 - ARC_R * 7/10 - 16);
 
     // ── Right panel ───────────────────────────────────────────────────────
     lv_obj_t *right = lv_obj_create(scr);
     lv_obj_set_pos(right, W - RIGHT_W, 0);
     lv_obj_set_size(right, RIGHT_W, MAIN_H);
-    lv_obj_set_style_bg_color(right, CLR_PANEL, 0);
-    lv_obj_set_style_bg_opa(right, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(right, CLR_BORDER, 0);
-    lv_obj_set_style_border_width(right, 1, 0);
-    lv_obj_set_style_border_side(right, LV_BORDER_SIDE_LEFT, 0);
+    lv_obj_set_style_bg_opa(right, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(right, 0, 0);
     lv_obj_set_style_radius(right, 0, 0);
     lv_obj_set_style_pad_left(right, 14, 0);
     lv_obj_set_style_pad_top(right, 14, 0);
@@ -459,33 +510,14 @@ void dashboard_ui_create(lv_display_t *disp)
                               &lv_font_montserrat_48);
     lv_obj_align(s_lbl_aux_v, LV_ALIGN_TOP_LEFT, 0, 226);
 
-    // ── Bottom bar ────────────────────────────────────────────────────────
-    lv_obj_t *bot = lv_obj_create(scr);
-    lv_obj_set_pos(bot, 0, MAIN_H);
-    lv_obj_set_size(bot, W, BOT_H);
-    lv_obj_set_style_bg_color(bot, lv_color_hex(0x050709), 0);
-    lv_obj_set_style_border_color(bot, CLR_BORDER, 0);
-    lv_obj_set_style_border_width(bot, 1, 0);
-    lv_obj_set_style_border_side(bot, LV_BORDER_SIDE_TOP, 0);
-    lv_obj_set_style_radius(bot, 0, 0);
-    lv_obj_clear_flag(bot, LV_OBJ_FLAG_SCROLLABLE);
-
-    make_label(bot, "CAN 500 kbps", CLR_TEXT_DIM, &lv_font_montserrat_10);
-    lv_obj_t *can_lbl = lv_obj_get_child(bot, 0);
-    lv_obj_align(can_lbl, LV_ALIGN_LEFT_MID, 24, 0);
-
-    make_label(bot, "ESP32-P4  |  M5Stack Tab5", CLR_TEXT_DIM,
-               &lv_font_montserrat_10);
-    lv_obj_t *hw_lbl = lv_obj_get_child(bot, 1);
-    lv_obj_align(hw_lbl, LV_ALIGN_CENTER, 0, 0);
-
-    s_dot_can = lv_obj_create(bot);
+    // ── CAN indicator dot (bottom-right of screen) ───────────────────────
+    s_dot_can = lv_obj_create(scr);
     lv_obj_set_size(s_dot_can, 10, 10);
     lv_obj_set_style_radius(s_dot_can, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(s_dot_can, CLR_GREEN, 0);
     lv_obj_set_style_bg_opa(s_dot_can, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_dot_can, 0, 0);
-    lv_obj_align(s_dot_can, LV_ALIGN_RIGHT_MID, -16, 0);
+    lv_obj_set_pos(s_dot_can, W - 16, H - 16);
 }
 
 // ── dashboard_ui_update ───────────────────────────────────────────────────
@@ -546,17 +578,17 @@ void dashboard_ui_update(const DashData *d)
         }
     }
 
-    // ── SOC bar ───────────────────────────────────────────────────────────
+    // ── SOC arc ───────────────────────────────────────────────────────────
+    // Arc sweeps from ARC_START(120°) to ARC_END(240°) = 120° total.
+    // Fill from start(120°) upward: 0%=empty, 100%=full 120° sweep.
     static lv_color_t last_soc_col = {0};
     float soc_f = d->soc_pct / 100.0f;
     lv_color_t soc_col = soc_f >= 0.50f ? CLR_CYAN :
                          soc_f >= 0.21f ? CLR_AMBER : CLR_RED;
-    lv_coord_t soc_fill = (lv_coord_t)(soc_f * BAR_H);
-    if (soc_fill > BAR_H) soc_fill = BAR_H;
-    lv_obj_set_pos(s_bar_soc, s_soc_bar_x, BAR_TOP + BAR_H - soc_fill);
-    lv_obj_set_size(s_bar_soc, BAR_W, soc_fill);
+    int16_t soc_end_angle = (int16_t)(ARC_START + soc_f * (ARC_END - ARC_START));
+    lv_arc_set_angles(s_bar_soc, ARC_START, soc_end_angle);
     if (memcmp(&soc_col, &last_soc_col, sizeof(lv_color_t)) != 0) {
-        lv_obj_set_style_bg_color(s_bar_soc, soc_col, 0);
+        lv_obj_set_style_arc_color(s_bar_soc, soc_col, LV_PART_INDICATOR);
         lv_obj_set_style_text_color(s_lbl_soc_pct, soc_col, 0);
         last_soc_col = soc_col;
     }
@@ -572,36 +604,40 @@ void dashboard_ui_update(const DashData *d)
 
     // ── Gear ──────────────────────────────────────────────────────────────
     static int last_gear = -1;
-    const char *gnames[] = {"P","R","N","D","B"};
-    int g = (d->gear >= 0 && d->gear < 5) ? d->gear : 0;
-    lv_label_set_text(s_lbl_gear, gnames[g]);
+    const char *gnames[] = {"P","R","N","D"};
+    int g = (d->gear >= 0 && d->gear < 4) ? d->gear : 0;
     if (g != last_gear) {
-        for (int i = 0; i < 5; i++)
+        for (int i = 0; i < 4; i++)
             lv_obj_set_style_text_color(s_lbl_prnd[i],
                 i == g ? CLR_CYAN : CLR_TEXT_DIM, 0);
         last_gear = g;
     }
 
-    // ── Power bar ─────────────────────────────────────────────────────────
+    // ── Power arc ─────────────────────────────────────────────────────────
+    // Arc sweeps PWR_ARC_START(300°) to PWR_ARC_END(60°) = 120° total.
+    // Zero at arc midpoint (300+60°/2 = 330°... wraps = center at 0°/360°).
+    // Drive (+kW): fills upper half from center toward PWR_ARC_END(60°).
+    // Regen (-kW): fills lower half from center toward PWR_ARC_START(300°).
     static lv_color_t last_pwr_col = {0};
     float kw      = d->power_kw;
-    float kw_frac = kw / PWR_FULL;
-    lv_coord_t half   = BAR_H / 2;
-    lv_coord_t zero_y = BAR_TOP + half;
+    float kw_frac = fabsf(kw) / PWR_FULL;
+    if (kw_frac > 1.0f) kw_frac = 1.0f;
     lv_color_t pwr_col = kw >= 0.0f ? CLR_ORANGE : CLR_GREEN;
+
+    // Arc center angle = midpoint of 300°→60° sweep = 360° = 0°
+    // Half sweep = 60°
+    // Drive: from 0° (center) toward 60° = end angle increases from 0
+    // Regen: from 300° (start) toward 0° = start angle increases toward 0
+    int16_t pwr_half = 60;  // half of 120° total sweep
     if (kw >= 0.0f) {
-        lv_coord_t fh = (lv_coord_t)(kw_frac * half);
-        if (fh > half) fh = half;
-        lv_obj_set_pos(s_bar_pwr, s_pwr_bar_x, zero_y - fh);
-        lv_obj_set_size(s_bar_pwr, BAR_W, fh);
+        int16_t fill = (int16_t)(kw_frac * pwr_half);
+        lv_arc_set_angles(s_bar_pwr, 360 - fill, 360);  // upper fill
     } else {
-        lv_coord_t fh = (lv_coord_t)(-kw_frac * half);
-        if (fh > half) fh = half;
-        lv_obj_set_pos(s_bar_pwr, s_pwr_bar_x, zero_y);
-        lv_obj_set_size(s_bar_pwr, BAR_W, fh);
+        int16_t fill = (int16_t)(kw_frac * pwr_half);
+        lv_arc_set_angles(s_bar_pwr, PWR_ARC_START, PWR_ARC_START + fill);  // lower fill
     }
     if (memcmp(&pwr_col, &last_pwr_col, sizeof(lv_color_t)) != 0) {
-        lv_obj_set_style_bg_color(s_bar_pwr, pwr_col, 0);
+        lv_obj_set_style_arc_color(s_bar_pwr, pwr_col, LV_PART_INDICATOR);
         lv_obj_set_style_text_color(s_lbl_pwr_val, pwr_col, 0);
         last_pwr_col = pwr_col;
     }
@@ -619,6 +655,29 @@ void dashboard_ui_update(const DashData *d)
 
     snprintf(buf, sizeof(buf), "%.1f V", d->aux_volts);
     lv_label_set_text(s_lbl_aux_v, buf);
+
+    // ── Cruise control ────────────────────────────────────────────────────
+    {
+        uint8_t cs = d->cruise_state;
+        if (cs == CRUISE_CC_NONE || cs == CRUISE_CC_CANCEL) {
+            lv_label_set_text(s_lbl_cruise_st, "");
+            lv_label_set_text(s_lbl_cruise, "");
+        } else if (cs & CRUISE_CC_SET) {
+            lv_label_set_text(s_lbl_cruise_st, "SET");
+            lv_obj_set_style_text_color(s_lbl_cruise_st, CLR_CYAN, 0);
+            snprintf(buf, sizeof(buf), "%.0f", SPEED_TO_DISPLAY(d->cruise_kph));
+            lv_label_set_text(s_lbl_cruise, buf);
+        } else if (cs & CRUISE_CC_RESUME) {
+            lv_label_set_text(s_lbl_cruise_st, "RES");
+            lv_obj_set_style_text_color(s_lbl_cruise_st, CLR_AMBER, 0);
+            snprintf(buf, sizeof(buf), "%.0f", SPEED_TO_DISPLAY(d->cruise_kph));
+            lv_label_set_text(s_lbl_cruise, buf);
+        } else if (cs & CRUISE_CC_ON) {
+            lv_label_set_text(s_lbl_cruise_st, "CC");
+            lv_obj_set_style_text_color(s_lbl_cruise_st, CLR_TEXT_MID, 0);
+            lv_label_set_text(s_lbl_cruise, "");
+        }
+    }
 
     // ── Invalidate ────────────────────────────────────────────────────────
     lv_obj_invalidate(lv_screen_active());

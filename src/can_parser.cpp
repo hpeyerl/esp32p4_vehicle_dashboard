@@ -3,10 +3,11 @@
 // =============================================================
 
 #include "can_parser.h"
+#include <limits.h>
 #include <string.h>
 
 // Global dashboard data instance
-DashData g_dash = {};
+DashData g_dash = { .dir_confirmed = INT8_MIN };
 
 // ── Intel (LE) signal extraction ──────────────────────────────────────────
 static uint64_t extract_le(const uint8_t *data, uint8_t start_bit, uint8_t len)
@@ -102,9 +103,27 @@ void parse_can_frame(uint32_t id, const uint8_t *data, uint32_t now_ms)
         g_dash.last_ms_0x210 = now_ms;
         break;
 
-    case 0xDEAD:
-        // TODO: replace with real PRNDL CAN ID and signal layout
-        // g_dash.gear = (uint8_t)can_signal(data, start, len, 1, 0, false);
+    case CAN_ID_GEAR:                               // 0x312 JLR G1 shifter
+        // byte[3] upper nibble: 0=P 1=R 2=N 3=D
+        // NOTE: requested gear only — not confirmed by Zombieverter.
+        // Cross-check against dir_confirmed when oic dir mapping is added.
+        g_dash.gear = (data[SIG_GEAR_BYTE] >> SIG_GEAR_SHIFT) & SIG_GEAR_MASK;
+        if (g_dash.gear > 3) g_dash.gear = 0;
+        g_dash.last_ms_0x312 = now_ms;
+        break;
+
+    // TODO: add case for Zombieverter dir signal (CAN ID TBD via oic)
+    // case CAN_ID_DIR:
+    //     g_dash.dir_confirmed = (int8_t)can_signal(data, ...);
+    //     break;
+
+    case CAN_ID_CRUISE:                             // 0xDEAD — TODO: assign
+        // TODO: define signal layout once oic CAN IDs are known
+        // cruisestt  = bitmask byte, signal layout TBD
+        // cruisespeed = RPM value, signal layout TBD
+        // g_dash.cruise_state = (uint8_t)can_signal(data, ...);
+        // g_dash.cruise_kph   = can_signal(data, ...) * CRUISE_RPM_TO_KPH;
+        g_dash.last_ms_cruise = now_ms;
         break;
 
     default:

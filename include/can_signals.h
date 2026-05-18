@@ -17,6 +17,11 @@
 #define CAN_ID_BMS_MAIN         0x356   // Pack voltage + current + battery temp
 #define CAN_ID_SOC              0x355   // State of charge
 #define CAN_ID_AUX_BATT         0x210   // 12V auxiliary battery voltage
+#define CAN_ID_GEAR             0x312   // JLR G1 shifter PRND
+
+// Cruise control — Zombieverter cruisespeed + cruisestt
+// CAN IDs TBD — add via oic and update these
+#define CAN_ID_CRUISE           0xDEAD  // TODO: assign via oic
 
 // -------------------------------------------------------------
 //  Signal layout within each frame
@@ -82,6 +87,11 @@
 #define SIG_AUX_VOLTS_OFFSET    0.0f
 #define SIG_AUX_VOLTS_SIGNED    false
 
+// 0x312  Gear — byte[3] upper nibble (bits 7-4), 0=P 1=R 2=N 3=D
+#define SIG_GEAR_BYTE           3
+#define SIG_GEAR_SHIFT          4
+#define SIG_GEAR_MASK           0x0F
+
 // -------------------------------------------------------------
 //  Derived values (not from CAN directly)
 // -------------------------------------------------------------
@@ -103,3 +113,19 @@
 #define LOW_SOC_PCT             10.0f
 #define WARN_AUX_VOLTS_LOW      11.5f
 #define WARN_AUX_VOLTS_HIGH     15.5f
+
+// -------------------------------------------------------------
+//  Cruise control
+// -------------------------------------------------------------
+// cruisestt bitmask values (from Stm32-vcu vehicle.h)
+#define CRUISE_CC_NONE      0
+#define CRUISE_CC_ON        1
+#define CRUISE_CC_CANCEL    2
+#define CRUISE_CC_SET       4
+#define CRUISE_CC_RESUME    8
+
+// cruisespeed is in motor RPM — convert to kph for display
+// Assumes: high gear 1:1, transfer case 1:1, diff 4.10:1, 33" tires
+// kph = rpm * PI * 0.0254 * 33 * 3.6 / (4.10 * 60)
+#define CRUISE_RPM_TO_KPH   0.03862f
+#define CRUISE_KPH_TO_RPM   25.89f
