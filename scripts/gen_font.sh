@@ -39,7 +39,9 @@
 set -e
 
 SIZE="${1:-72}"
-FONT="/usr/share/fonts/truetype/montserrat/Montserrat-VariableFont_wght.ttf"
+#FONT="/usr/share/fonts/truetype/montserrat/Montserrat-VariableFont_wght.ttf"
+FONT="/$HOME/GitHub/montserrat/static/Montserrat-Medium.ttf"
+
 OUT="src/lv_font_montserrat_${SIZE}.c"
 
 if [ ! -f "$FONT" ]; then

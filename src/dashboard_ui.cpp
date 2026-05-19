@@ -27,6 +27,7 @@
 #include <cstring>
 
 LV_FONT_DECLARE(lv_font_montserrat_72)
+LV_FONT_DECLARE(lv_font_montserrat_110)
 
 // ── Colour palette ────────────────────────────────────────────────────────
 #define CLR_BG          lv_color_hex(0x07090E)
@@ -371,7 +372,7 @@ void dashboard_ui_create(lv_display_t *disp)
                                     &lv_font_montserrat_14);
     lv_obj_align(spd_lbl, LV_ALIGN_TOP_MID, 0, 18);
 
-    s_lbl_speed = make_label(ctr, "0", CLR_WHITE, &lv_font_montserrat_48);
+    s_lbl_speed = make_label(ctr, "0", CLR_WHITE, &lv_font_montserrat_110);
     lv_obj_align(s_lbl_speed, LV_ALIGN_CENTER, 0, -40);
 
     lv_obj_t *unit = make_label(ctr, UNITS_SPEED_LABEL, CLR_TEXT_MID,
@@ -631,10 +632,10 @@ void dashboard_ui_update(const DashData *d)
     int16_t pwr_half = 60;  // half of 120° total sweep
     if (kw >= 0.0f) {
         int16_t fill = (int16_t)(kw_frac * pwr_half);
-        lv_arc_set_angles(s_bar_pwr, 360 - fill, 360);  // upper fill
+        lv_arc_set_angles(s_bar_pwr, 360 - fill, 360);  // drive: center→top
     } else {
         int16_t fill = (int16_t)(kw_frac * pwr_half);
-        lv_arc_set_angles(s_bar_pwr, PWR_ARC_START, PWR_ARC_START + fill);  // lower fill
+        lv_arc_set_angles(s_bar_pwr, 360, 360 + fill);  // regen: center→bottom
     }
     if (memcmp(&pwr_col, &last_pwr_col, sizeof(lv_color_t)) != 0) {
         lv_obj_set_style_arc_color(s_bar_pwr, pwr_col, LV_PART_INDICATOR);
