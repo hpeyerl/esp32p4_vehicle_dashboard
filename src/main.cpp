@@ -25,6 +25,7 @@
 #include "dashboard_ui.h"
 #include "display_driver.h"   // ← unified API; never include a backend header directly
 #include "ota_server.h"
+#include "vss_sensor.h"
 #include "units.h"
 
 #ifndef STRINGIFY
@@ -105,6 +106,17 @@ static void ui_task(void *arg)
         memcpy(&snap, &g_dash, sizeof(DashData));
         xSemaphoreGive(g_dash_mutex);
 
+        // VSS speed — overrides CAN speed when sensor is active
+        #if !SIM_DATA
+        {
+            float vss_mph = vss_get_mph();
+            if (vss_mph > 0.0f) {
+                xSemaphoreTake(g_dash_mutex, portMAX_DELAY);
+                g_dash.speed = vss_mph;
+                xSemaphoreGive(g_dash_mutex);
+            }
+        }
+        #endif
 #if SIM_DATA
         {
             static float t = 0.0f;
@@ -154,6 +166,7 @@ extern "C" void app_main(void)
 
     app_display_init();
     ota_server_start();
+    vss_sensor_init();
     twai_init();
 
     xTaskCreatePinnedToCore(can_rx_task, "can_rx", 4096,  NULL, 10, NULL, 0);
