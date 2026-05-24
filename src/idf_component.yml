@@ -1,23 +1,28 @@
-# src/idf_component.yml
-#
-# ESP-IDF Component Manager dependencies for the Tab5 EV Dashboard.
-# PlatformIO with framework=espidf picks this up automatically from src/.
-# Components are downloaded on first `pio run` into managed_components/.
+## idf_component.yml
+## ESP Component Registry dependencies for ev-dashboard
 
 dependencies:
-  idf: ">=5.3.0"
+  idf: ">=5.4.0"
 
-  # MIPI-DSI panel driver — ILI9881C (Tab5 units before Oct 14 2025)
-  espressif/esp_lcd_ili9881c: ">=1.0.1"
+  ## ── Panel drivers ─────────────────────────────────────────────────────
+  espressif/esp_lcd_ili9881c:
+    version: "^1.0.0"
+  espressif/esp_lcd_st7123:
+    version: "^1.0.0"
+  espressif/esp_lcd_hx8399:
+    version: "^1.0.0"
 
-  # MIPI-DSI panel driver — ST7123 combined display+touch (Tab5 from Oct 14 2025)
-  espressif/esp_lcd_st7123: ">=1.0.0"
+  ## ── Touch drivers ─────────────────────────────────────────────────────
+  espressif/esp_lcd_touch_gt911:
+    version: "^1.0.0"
+  espressif/esp_lcd_touch_st7123:
+    version: "^1.0.0"
+  espressif/esp_lcd_touch:
+    version: "^1.0.0"
 
-  # Touch driver — GT911 (used with ILI9881C variant)
-  espressif/esp_lcd_touch_gt911: ">=1.1.0"
+  ## ── OTA server dependencies ───────────────────────────────────────────
+  ## esp_http_server, esp_wifi, nvs_flash, esp_ota, mdns are all
+  ## bundled with IDF 5.4 — no separate entries needed here.
+  espressif/mdns:
+    version: "^1.0.0"
 
-  # Touch driver — ST7123 (used with ST7123 display variant)
-  espressif/esp_lcd_touch_st7123: ">=1.0.0"
-
-  # Base touch component (required by all touch drivers above)
-  espressif/esp_lcd_touch: ">=1.0.0"

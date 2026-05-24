@@ -114,6 +114,12 @@
 #define LV_USE_QRCODE     0
 #define LV_USE_MONKEY     0
 #define LV_USE_DEMO_WIDGETS 0
+#define LV_BUILD_EXAMPLES  0   /* don't compile managed_components/lvgl__lvgl/examples/ */
+#define LV_USE_DEMO_BENCHMARK 0
+#define LV_USE_DEMO_STRESS    0
+#define LV_USE_DEMO_MUSIC     0
+#define LV_USE_DEMO_FLEX_LAYOUT 0
+#define LV_USE_DEMO_TRANSFORM   0
 
 #endif /* LV_CONF_H */
 #endif /* Content enable */

@@ -1,12 +1,12 @@
 // =============================================================
-//  tab5_display.h — M5Stack Tab5 Display + Touch Backend
+//  waveshare_display.h — Waveshare 12.3" Display + GT911 Touch
 //
 //  Internal backend — do NOT include this from app code.
 //  Include display_driver.h instead.
 //
-//  Panel:  ST7123 MIPI-DSI, 2-lane, portrait 720×1280
-//  Touch:  ST7123 combined touch, I2C 0x55
-//  LVGL:   landscape 1280×720 (PPA-rotated in flush cb)
+//  Panel:  Himax HX8399-C, 4-lane MIPI-DSI, portrait 720×1920
+//  Touch:  Goodix GT911, I2C
+//  LVGL:   landscape 1920×720 (PPA-rotated in flush cb)
 // =============================================================
 
 #pragma once
@@ -18,8 +18,8 @@
 extern "C" {
 #endif
 
-esp_err_t              tab5_display_init(lv_display_t **disp_out);
-esp_lcd_panel_handle_t tab5_get_panel(void);
+esp_err_t              ws_display_init(lv_display_t **disp_out);
+esp_lcd_panel_handle_t ws_get_panel(void);
 
 #ifdef __cplusplus
 }

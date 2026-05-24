@@ -1,6 +1,24 @@
-# This file was automatically generated for projects
-# without default 'CMakeLists.txt' file.
-
-FILE(GLOB_RECURSE app_sources ${CMAKE_SOURCE_DIR}/src/*.*)
-
-idf_component_register(SRCS ${app_sources})
+idf_component_register(
+    SRCS
+        "main.cpp"
+        "display_driver.c"
+        "tab5_display.c"
+        "waveshare_display.c"
+        "ota_server.c"
+        "can_parser.cpp"
+        "dashboard_ui.cpp"
+        "lv_font_montserrat_110.c"
+        "lv_font_montserrat_72.c"
+    INCLUDE_DIRS "."
+    PRIV_REQUIRES
+        esp_lcd
+        esp_wifi
+        esp_http_server
+        app_update
+        nvs_flash
+        esp_netif
+        esp_event
+        driver
+        esp_timer
+        esp_psram
+)
