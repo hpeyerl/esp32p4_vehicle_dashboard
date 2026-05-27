@@ -16,8 +16,11 @@
 
 #include "ota_server.h"
 #include "wifi_config.h"
+#include "vss_web_handlers.h"
 
 #include "esp_log.h"
+#include "esp_check.h"
+#include "esp_hosted.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_netif.h"
@@ -57,7 +60,10 @@ static int s_retry = 0;
 static void prv_wifi_event_handler(void *arg, esp_event_base_t base,
                                    int32_t id, void *data)
 {
-    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
+        esp_wifi_connect();
+        ESP_LOGD(TAG, "WiFi STA started — connecting");
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         if (s_retry < WIFI_MAX_RETRY) {
             esp_wifi_connect();
             s_retry++;
@@ -82,11 +88,24 @@ static void prv_wifi_event_handler(void *arg, esp_event_base_t base,
     }
 }
 
+// ── One-time WiFi stack init (shared by STA and AP paths) ───────────────
+static esp_err_t prv_wifi_common_init(void)
+{
+    // ESP32-P4-Nano: initialize ESP-Hosted SPI transport to C6 coprocessor
+    // Must be called before esp_wifi_init().
+    ESP_RETURN_ON_ERROR(esp_hosted_init(), TAG, "esp_hosted_init failed");
+    ESP_ERROR_CHECK(esp_netif_init());
+    esp_err_t err = esp_event_loop_create_default();
+    // ESP_ERR_INVALID_STATE means already created — that's fine
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE)
+        return err;
+    return ESP_OK;
+}
+
 static esp_err_t prv_wifi_sta_init(void)
 {
     s_wifi_eg = xEventGroupCreate();
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    ESP_RETURN_ON_ERROR(prv_wifi_common_init(), TAG, "wifi common init failed");
     esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
@@ -106,11 +125,11 @@ static esp_err_t prv_wifi_sta_init(void)
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
     ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_ERROR_CHECK(esp_wifi_connect());
+    // connect is triggered by WIFI_EVENT_STA_START in the event handler
 
     EventBits_t bits = xEventGroupWaitBits(s_wifi_eg,
         WIFI_CONNECTED_BIT | WIFI_FAIL_BIT, pdFALSE, pdFALSE,
-        pdMS_TO_TICKS(15000));
+        pdMS_TO_TICKS(20000));
 
     if (bits & WIFI_CONNECTED_BIT) return ESP_OK;
     ESP_LOGE(TAG, "WiFi STA connect failed");
@@ -119,13 +138,18 @@ static esp_err_t prv_wifi_sta_init(void)
 
 static esp_err_t prv_wifi_ap_init(void)
 {
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    // Common init may have already been called by STA path — that's fine
+    ESP_RETURN_ON_ERROR(prv_wifi_common_init(), TAG, "wifi common init failed");
     esp_netif_t *ap_netif = esp_netif_create_default_wifi_ap();
     (void)ap_netif;
 
+    // Only init WiFi driver if STA path didn't already do it
+    // esp_wifi_init is idempotent when called with the same config
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    esp_err_t err = esp_wifi_init(&cfg);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE)
+        ESP_ERROR_CHECK(err);
+
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
         WIFI_EVENT, ESP_EVENT_ANY_ID, prv_wifi_event_handler, NULL, NULL));
 
@@ -354,7 +378,7 @@ static void prv_httpd_start(void)
 {
     httpd_config_t cfg    = HTTPD_DEFAULT_CONFIG();
     cfg.server_port       = OTA_HTTP_PORT;
-    cfg.max_uri_handlers  = 4;
+    cfg.max_uri_handlers  = 6;
     cfg.recv_wait_timeout = 30;
     cfg.send_wait_timeout = 30;
     cfg.max_resp_headers  = 8;
@@ -370,6 +394,7 @@ static void prv_httpd_start(void)
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &root));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &status));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &update));
+    vss_register_handlers(server);
 
     ESP_LOGI(TAG, "HTTP server started on port %d", OTA_HTTP_PORT);
 }

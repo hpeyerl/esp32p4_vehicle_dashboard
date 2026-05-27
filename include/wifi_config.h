@@ -1,30 +1,37 @@
 // =============================================================
-//  wifi_config.h — WiFi credentials for OTA server
+//  wifi_config.h — WiFi + OTA server configuration
 //
-//  !! ADD THIS FILE TO .gitignore !!
-//
-//  Two modes (set OTA_WIFI_MODE in platformio.ini):
-//    OTA_WIFI_MODE_STA  — joins your existing network (recommended
-//                         for workshop use; device gets DHCP address
-//                         printed to serial on boot)
-//    OTA_WIFI_MODE_AP   — device creates its own AP; useful when no
-//                         infrastructure WiFi is available in the car
+//  STA credentials come from secrets.h (gitignored).
+//  If secrets.h is absent or doesn't define the credentials,
+//  the device falls back to AP mode automatically.
 // =============================================================
 
 #pragma once
 
-// ── Station mode (join existing network) ─────────────────────
-#define OTA_STA_SSID      "your_network_ssid"
-#define OTA_STA_PASSWORD  "your_network_password"
+// Pull in secrets.h if it exists — gitignored, never committed.
+// Create include/secrets.h with your actual credentials.
+#if __has_include("secrets.h")
+  #include "secrets.h"
+#endif
 
-// ── Access Point mode (device creates AP) ────────────────────
+// ── Station mode credentials ──────────────────────────────────
+// Defined in secrets.h. If absent, STA connect will fail and
+// the device falls back to AP mode (see ota_server.c).
+#ifndef OTA_STA_SSID
+  #define OTA_STA_SSID      ""
+#endif
+#ifndef OTA_STA_PASSWORD
+  #define OTA_STA_PASSWORD  ""
+#endif
+
+// ── Access Point fallback ─────────────────────────────────────
 #define OTA_AP_SSID       "ev-dashboard"
-#define OTA_AP_PASSWORD   "dashboard1"   // min 8 chars; set "" for open AP
+#define OTA_AP_PASSWORD   "dashboard1"
 #define OTA_AP_CHANNEL    6
 #define OTA_AP_MAX_CONN   2
 
-// ── OTA HTTP server port ──────────────────────────────────────
+// ── HTTP server ───────────────────────────────────────────────
 #define OTA_HTTP_PORT     80
 
-// ── mDNS hostname — access via http://ev-dashboard.local ─────
+// ── mDNS hostname ─────────────────────────────────────────────
 #define OTA_MDNS_HOSTNAME "ev-dashboard"

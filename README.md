@@ -1,57 +1,211 @@
-# EV Dashboard — M5Stack Tab5 Port
+# EV Dashboard — ESP32-P4 Nano + Waveshare 12.3"
 
-An EV Dashboard for ESP32-P4 based board with MIPI-DSI.  Currently ported to M5 Tab5 for testing.  Later ports to another display like WaveShare 10.1 or maybe a Riverdi 10.1.
-
+An EV Dashboard for the ESP32-P4-Nano with MIPI-DSI display support.
 CAN messages are currently configured for ZombieVerter VCU.
 
-## What changed from the Waveshare build
+## Hardware
 
-| Item | Waveshare build | Tab5 build |
+| Component | Part |
+|---|---|
+| MCU board | Waveshare ESP32-P4-Nano |
+| Display | Waveshare 12.3" DSI Touch Display (12.3-DSI-TOUCH-A) |
+| Display controller | Himax HX8399-C, 2-lane MIPI-DSI, 720×1920 portrait |
+| Touch | Goodix GT911, I2C on GPIO7/8 (DSI connector) |
+| CAN transceiver | IS3050G or compatible (TWAI, GPIO53/54) |
+| Flash | GD25Q128, 16MB |
+| PSRAM | 32MB HEX |
+
+## Pin assignments (ESP32-P4-Nano)
+
+| Signal | GPIO | Notes |
 |---|---|---|
-| Resolution | 1280×800 | 1280×720 |
-| Display driver | Generic DSI stub (TODO) | ILI9881C or ST7123 (build-flag selected) |
-| Touch | GT911 GPIO 8/9 | GT911 GPIO 17/18 or ST7123 combined |
-| CAN TX/RX | GPIO 5/4 | GPIO 53/54 (GPIO_EXT / Grove port) |
-| Display init | `// TODO` stub | `tab5_display_init()` in `src/tab5_display.h` |
+| DSI D0/D1/CLK | internal | MIPI DSI peripheral, not on headers |
+| Touch I2C SDA | GPIO 7 | On DSI FPC connector |
+| Touch I2C SCL | GPIO 8 | On DSI FPC connector |
+| Touch INT | GPIO 23 | |
+| Touch RST | GPIO 24 | |
+| LCD Reset | GPIO 27 | Active low |
+| Backlight | GPIO 22 | LEDC PWM |
+| TWAI TX | GPIO 53 | IS3050G CAN transceiver |
+| TWAI RX | GPIO 54 | IS3050G CAN transceiver |
+| VSS pulse | GPIO 5 | Reed switch to GND, internal pullup |
 
-Everything else — CAN parser, signal map, LVGL layout, splash screen,
-all build scripts — is unchanged.
+## CAN transceiver wiring (IS3050G)
 
-## CRITICAL: Hardware revision check
+```
+ESP32-P4-Nano GPIO53  →  IS3050G TX
+ESP32-P4-Nano GPIO54  →  IS3050G RX
+ESP32-P4-Nano 3.3V    →  IS3050G VCC
+ESP32-P4-Nano GND     →  IS3050G GND
+IS3050G CANH          →  vehicle CANH
+IS3050G CANL          →  vehicle CANL
+```
 
-Check the sticker on the back of your Tab5 before building.
+## VSS (Vehicle Speed Sensor) wiring
 
-  ILI9881C sticker → -DTAB5_DISPLAY_ILI9881C=1 in platformio.ini (default)
-  ST7123   sticker → -DTAB5_DISPLAY_ILI9881C=0 in platformio.ini
+Reed switch VSS — two wire, no polarity:
+```
+One wire  →  GPIO5
+Other wire →  GND
+```
+Internal pullup enabled. Calibration (tire circumference, diff ratio,
+pulses/rev) editable at http://ev-dashboard.local/vss after first boot.
 
-Units before Oct 14 2025: ILI9881C + GT911
-Units from  Oct 14 2025:  ST7123 combined driver
+## First-time setup
 
-Wrong setting = blank display, no error message.
+### 1. WiFi credentials
 
-## IS3050G CAN transceiver wiring
+Copy `include/secrets.h.template` to `include/secrets.h` and fill in:
+```c
+#define OTA_STA_SSID     "your_network"
+#define OTA_STA_PASSWORD "your_password"
+```
+`secrets.h` is gitignored — never committed. If absent, the device
+creates an AP: SSID `ev-dashboard`, password `dashboard1`.
 
-  Tab5 GPIO_EXT pin 1 (GPIO 53) → IS3050G TX
-  Tab5 GPIO_EXT pin 2 (GPIO 54) → IS3050G RX
-  Tab5 3.3V                      → IS3050G VCC
-  Tab5 GND                       → IS3050G GND
-  IS3050G CANH → vehicle CANH
-  IS3050G CANL → vehicle CANL
+### 2. First USB flash
 
-The red Grove (HY2.0-4P) port uses the same GPIO 53/54 — either connector works.
+The first flash must be via USB — OTA partitions don't exist yet.
+Connect USB, then:
+```bash
+pio run -e waveshare_usb -t upload --upload-port /dev/ttyACM0
+```
 
-## Build
+After this, all subsequent flashes can be OTA over WiFi.
 
-  pio run                              # build
-  pio run --target upload              # flash
-  pio device monitor                   # serial monitor
-  pio run -e tab5_debug --target upload  # debug build
+### 3. Flash offsets (ESP32-P4 specific)
 
-Download mode: hold Reset ~2s until green LED flashes rapidly.
+ESP32-P4 uses non-standard offsets. PlatformIO handles these automatically.
+If you ever need to flash manually with esptool:
+```bash
+~/.platformio/packages/tool-esptoolpy/esptool.py \
+  --chip esp32p4 --port /dev/ttyACM0 --baud 921600 \
+  write_flash \
+  0x2000   .pio/build/waveshare_usb/bootloader.bin \
+  0x8000   .pio/build/waveshare_usb/partitions.bin \
+  0xF000   .pio/build/waveshare_usb/ota_data_initial.bin \
+  0x20000  .pio/build/waveshare_usb/firmware.bin
+```
+
+## Build targets
+
+### Normal development (OTA — after first USB flash)
+
+```bash
+# Build + flash over WiFi (uses ev-dashboard.local)
+pio run -e waveshare -t upload
+
+# With explicit IP if mDNS isn't resolving
+OTA_HOST=192.168.1.x pio run -e waveshare -t upload
+```
+
+### USB flash targets (first flash, recovery, partition table change)
+
+```bash
+# Waveshare 12.3" — full USB flash (bootloader + partitions + app)
+pio run -e waveshare_usb -t upload --upload-port /dev/ttyACM0
+
+# M5Stack Tab5 — full USB flash
+pio run -e tab5_usb -t upload --upload-port /dev/ttyACM0
+```
+
+### Debug builds (verbose logging, DASHBOARD_DEBUG_CAN=1)
+
+```bash
+# Waveshare debug — build + OTA flash
+pio run -e waveshare_debug -t upload
+
+# Waveshare debug — USB flash
+pio run -e waveshare_debug
+~/.platformio/packages/tool-esptoolpy/esptool.py \
+  --chip esp32p4 --port /dev/ttyACM0 --baud 921600 \
+  write_flash \
+  0x2000  .pio/build/waveshare_debug/bootloader.bin \
+  0x8000  .pio/build/waveshare_debug/partitions.bin \
+  0xF000  .pio/build/waveshare_debug/ota_data_initial.bin \
+  0x20000 .pio/build/waveshare_debug/firmware.bin
+```
+
+### Stub builds (no display hardware required)
+
+Use while waiting for display hardware. LVGL renders to a software
+framebuffer. WiFi, OTA, CAN, and VSS all work normally.
+MJPEG stream available at http://ev-dashboard.local/stream (TODO).
+
+```bash
+# USB flash (stub, release)
+pio run -e stub_usb -t upload --upload-port /dev/ttyACM0
+
+# USB flash (stub, debug)
+pio run -e stub_debug_usb -t upload --upload-port /dev/ttyACM0
+
+# OTA flash once stub firmware is running
+pio run -e stub -t upload
+```
+
+### Serial monitor
+
+```bash
+pio device monitor -e waveshare_debug --port /dev/ttyACM0
+```
+
+### Build only (no upload)
+
+```bash
+pio run -e waveshare
+pio run -e waveshare_debug
+pio run -e stub
+pio run -e stub_debug
+pio run -e tab5
+pio run -e tab5_debug
+```
+
+## OTA web interface
+
+After boot, the device announces itself via mDNS as `ev-dashboard.local`.
+
+| URL | Function |
+|---|---|
+| http://ev-dashboard.local/ | OTA firmware upload (drag & drop) |
+| http://ev-dashboard.local/status | JSON: version, partition, IP |
+| http://ev-dashboard.local/update | POST endpoint for curl/pio upload |
+| http://ev-dashboard.local/vss | VSS calibration (tire, diff ratio, PPR) |
+| http://ev-dashboard.local/stream | MJPEG display stream (TODO) |
+
+### OTA via curl
+
+```bash
+curl -X POST http://ev-dashboard.local/update \
+     -H "Content-Type: application/octet-stream" \
+     --data-binary @.pio/build/waveshare/firmware.bin
+```
+
+## Rollback safety
+
+New OTA firmware has 30 seconds to call `ota_server_mark_valid()`.
+If the firmware crashes before that, the bootloader automatically
+rolls back to the previous working image on next boot.
+
+## Display target summary
+
+| env | Display | DSI lanes | Resolution | USB/OTA |
+|---|---|---|---|---|
+| `waveshare` | Waveshare 12.3" HX8399-C | 2 | 1920×720 landscape | OTA |
+| `waveshare_usb` | Waveshare 12.3" HX8399-C | 2 | 1920×720 landscape | USB |
+| `waveshare_debug` | Waveshare 12.3" HX8399-C | 2 | 1920×720 landscape | OTA |
+| `tab5` | M5Stack Tab5 ST7123 | 2 | 1280×720 landscape | OTA |
+| `tab5_usb` | M5Stack Tab5 ST7123 | 2 | 1280×720 landscape | USB |
+| `tab5_debug` | M5Stack Tab5 ST7123 | 2 | 1280×720 landscape | OTA |
+| `stub` | Software framebuffer | none | 1920×720 | OTA |
+| `stub_usb` | Software framebuffer | none | 1920×720 | USB |
+| `stub_debug` | Software framebuffer | none | 1920×720 | OTA |
+| `stub_debug_usb` | Software framebuffer | none | 1920×720 | USB |
 
 ## Still TODO
 
-  1. PRNDL gear CAN ID — stub at case 0xDEAD in include/can_parser.h
-  2. Pack amps polarity — verify positive = discharge for your BMS
-  3. RANGE_FULL_SOC_MILES in include/can_signals.h
-  4. Battery Temp 2 — currently mirrors Batt 1
+1. MJPEG stream at `/stream` — framebuffer available via `display_stub_get_fb()`
+2. PRNDL gear CAN ID — stub at `case 0xDEAD` in `include/can_parser.h`
+3. Pack amps polarity — verify positive = discharge for your BMS
+4. `RANGE_FULL_SOC_MILES` in `include/can_signals.h`
+5. Battery Temp 2 — currently mirrors Batt 1
+6. Additional dashboard widgets for 1920×720 real estate

@@ -4,6 +4,7 @@ idf_component_register(
     SRCS
         "main.cpp"
         "display_driver.c"
+        "display_stub.c"
         "tab5_display.c"
         "waveshare_display.c"
         "ota_server.c"
@@ -26,4 +27,5 @@ idf_component_register(
         driver
         esp_timer
         esp_psram
+        lvgl__lvgl
 )

@@ -2,8 +2,9 @@
 //  waveshare_display.c — Waveshare 12.3" Display + GT911 Touch
 //
 //  Target:  ESP32-P4-Nano
-//  Panel:   Himax HX8399-C, 4-lane MIPI-DSI, portrait 720×1920
-//           95 MHz DPI, RGB565 framebuffer
+//  Panel:   Himax HX8399-C, 2-lane MIPI-DSI, portrait 720×1920
+//           75 MHz DPI, RGB565 framebuffer
+//           (P4-Nano has 2 DSI lanes per schematic)
 //  Touch:   Goodix GT911, I2C (espressif/esp_lcd_touch_gt911)
 //  Panel driver: espressif/esp_lcd_hx8399
 //
@@ -71,9 +72,11 @@ static const char *TAG = "ws_disp";
 // Source: ws_panel_12_3_a_4lane_mode in Waveshare kernel driver.
 // htotal = 720 + HFP(10) + HSync(10) + HBP(12) = 752
 // vtotal = 1920 + VFP(64) + VSync(18) + VBP(4) = 2006
-#define WS_DSI_LANE_NUM       4
-#define WS_DSI_LANE_MBPS      570   // = 95 MHz DPI * 24 bpp / 4 lanes
-#define WS_DPI_CLK_MHZ        95
+// P4-Nano has 2 DSI lanes only (confirmed from schematic).
+// Lane rate from HX8399_PANEL_BUS_DSI_2CH_CONFIG() in esp_lcd_hx8399.h.
+#define WS_DSI_LANE_NUM       2
+#define WS_DSI_LANE_MBPS      950   // 2-lane rate per esp_lcd_hx8399 component
+#define WS_DPI_CLK_MHZ        75    // reduced for 2-lane bandwidth
 #define WS_HSYNC_PULSE_WIDTH  10
 #define WS_HSYNC_BACK_PORCH   12
 #define WS_HSYNC_FRONT_PORCH  10
@@ -152,16 +155,14 @@ static const hx8399_lcd_init_cmd_t s_hx8399_init_cmds[] = {
                        0x14, 0x0F, 0x17, 0x00, 0x14, 0x1F, 0x35,
                        0x3F, 0x3F, 0x37, 0x48, 0x07, 0x0C, 0x0E,
                        0x11, 0x13, 0x12, 0x14, 0x0F, 0x17},             34,   0},
-    // SETMIPI — 4 lanes, HS clock always-on
-    {0xBA, (uint8_t[]){0x96, 0x83, 0x01},                                3,   0},
+    // NOTE: SETMIPI (0xBA) is sent by esp_lcd_hx8399 component based on lane_num.
+    // Do NOT include it here — the component handles lane configuration.
     // SETPANEL — BGR order
     {0xCC, (uint8_t[]){0x08},                                            1,   0},
     // SETOFFSET
     {0xC6, (uint8_t[]){0xFF, 0xF9},                                      2,   0},
-    // Sleep out — HX8399 datasheet mandates ≥120 ms
-    {0x11, (uint8_t[]){},                                                 0, 120},
-    // Display on
-    {0x29, (uint8_t[]){},                                                 0,  20},
+    // NOTE: Sleep out (0x11) and Display on (0x29) are sent by the
+    // esp_lcd_hx8399 component in panel_hx8399_init(). Do not duplicate here.
 };
 
 // ── LVGL flush callback ───────────────────────────────────────────────────
@@ -304,7 +305,7 @@ static esp_err_t prv_i2c_init(void)
 // ── HX8399-C DSI panel init ───────────────────────────────────────────────
 static esp_err_t prv_panel_init(void)
 {
-    // DSI bus — 4 lanes at 570 Mbps each
+    // DSI bus — 2 lanes at 950 Mbps each (P4-Nano hardware limit)
     esp_lcd_dsi_bus_config_t bus_cfg = {
         .bus_id             = 0,
         .num_data_lanes     = WS_DSI_LANE_NUM,
@@ -356,6 +357,7 @@ static esp_err_t prv_panel_init(void)
         .mipi_config = {
             .dsi_bus    = s_dsi_bus,
             .dpi_config = &dpi_cfg,
+            .lane_num   = WS_DSI_LANE_NUM,   // tells component to send HX8399_DSI_2_LANE
         },
     };
     panel_cfg.vendor_config = &vendor_cfg;
