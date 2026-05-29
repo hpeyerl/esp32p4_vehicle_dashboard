@@ -14,7 +14,10 @@ idf_component_register(
         "lv_font_montserrat_72.c"
         "vss_sensor.c"
         "vss_web_handlers.c"
+        "mjpeg_stream.c"
     INCLUDE_DIRS "."
+    REQUIRES
+        esp_hosted
     PRIV_REQUIRES
         esp_lcd
         esp_wifi

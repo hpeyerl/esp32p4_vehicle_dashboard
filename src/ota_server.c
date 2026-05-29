@@ -17,11 +17,29 @@
 #include "ota_server.h"
 #include "wifi_config.h"
 #include "vss_web_handlers.h"
+#include "mjpeg_stream.h"
+
+#if DISPLAY_STUB
+static const char s_view_html[] =
+    "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+    "<title>EV Dashboard Stream</title>"
+    "<style>body{margin:0;background:#000;display:flex;justify-content:center;align-items:center;min-height:100vh}"
+    "img{max-width:100%;max-height:100vh;object-fit:contain}</style></head>"
+    "<body><img src='/stream' alt='EV Dashboard'></body></html>";
+
+static esp_err_t prv_view_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_sendstr(req, s_view_html);
+    return ESP_OK;
+}
+#endif
+
 
 #include "esp_log.h"
 #include "esp_check.h"
-#include "esp_hosted.h"
 #include "esp_wifi.h"
+
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_http_server.h"
@@ -91,9 +109,6 @@ static void prv_wifi_event_handler(void *arg, esp_event_base_t base,
 // ── One-time WiFi stack init (shared by STA and AP paths) ───────────────
 static esp_err_t prv_wifi_common_init(void)
 {
-    // ESP32-P4-Nano: initialize ESP-Hosted SPI transport to C6 coprocessor
-    // Must be called before esp_wifi_init().
-    ESP_RETURN_ON_ERROR(esp_hosted_init(), TAG, "esp_hosted_init failed");
     ESP_ERROR_CHECK(esp_netif_init());
     esp_err_t err = esp_event_loop_create_default();
     // ESP_ERR_INVALID_STATE means already created — that's fine
@@ -309,7 +324,8 @@ static esp_err_t prv_post_update(httpd_req_t *req)
         return err;
     }
 
-    char buf[1024];
+    // Use static buffer — keeps it off the httpd task stack
+    static char buf[4096];
     int received  = 0;
     int remaining = req->content_len;
 
@@ -334,8 +350,9 @@ static esp_err_t prv_post_update(httpd_req_t *req)
         }
         received  += len;
         remaining -= len;
-        ESP_LOGD(TAG, "OTA progress: %d / %d bytes", received,
-                 req->content_len);
+        if (received % (128 * 1024) == 0)
+            ESP_LOGI(TAG, "OTA progress: %d / %d bytes", received,
+                     req->content_len);
     }
 
     err = esp_ota_end(ota_handle);
@@ -378,7 +395,7 @@ static void prv_httpd_start(void)
 {
     httpd_config_t cfg    = HTTPD_DEFAULT_CONFIG();
     cfg.server_port       = OTA_HTTP_PORT;
-    cfg.max_uri_handlers  = 6;
+    cfg.max_uri_handlers  = 10;
     cfg.recv_wait_timeout = 30;
     cfg.send_wait_timeout = 30;
     cfg.max_resp_headers  = 8;
@@ -395,6 +412,19 @@ static void prv_httpd_start(void)
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &status));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &update));
     vss_register_handlers(server);
+
+#if DISPLAY_STUB
+    httpd_uri_t stream = { .uri="/stream", .method=HTTP_GET,
+                           .handler=mjpeg_stream_handler };
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &stream));
+    ESP_LOGI(TAG, "registering /view handler...");
+    httpd_uri_t view = { .uri="/view", .method=HTTP_GET,
+                         .handler=prv_view_handler };
+    esp_err_t view_err = httpd_register_uri_handler(server, &view);
+    ESP_LOGI(TAG, "/view registration result: 0x%x", view_err);
+    ESP_ERROR_CHECK(view_err);
+    ESP_LOGI(TAG, "MJPEG viewer: http://ev-dashboard.local/view");
+#endif
 
     ESP_LOGI(TAG, "HTTP server started on port %d", OTA_HTTP_PORT);
 }
@@ -437,6 +467,7 @@ void ota_server_mark_valid(void)
         ESP_LOGW(TAG, "mark_valid: %s", esp_err_to_name(err));
     }
 }
+
 
 esp_err_t ota_server_start(void)
 {

@@ -155,7 +155,7 @@ extern "C" void app_main(void)
 #elif DISPLAY_TARGET == DISPLAY_TARGET_WAVESHARE
     const char *disp_name = "Waveshare12.3/HX8399-C " STRINGIFY(LCD_H_RES) "×" STRINGIFY(LCD_V_RES);
 #else
-    const char *disp_name = "unknown";
+    const char *disp_name = "stub " STRINGIFY(LCD_H_RES) "×" STRINGIFY(LCD_V_RES);
 #endif
 
     ESP_LOGI(TAG, "EV Dashboard  IDF %s  display: %s  units: %s",
@@ -163,6 +163,9 @@ extern "C" void app_main(void)
 
     g_dash_mutex = xSemaphoreCreateMutex();
     if (!g_dash_mutex) { ESP_LOGE(TAG, "mutex create failed"); abort(); }
+
+    // ESP32-P4-Nano: initialize SDIO transport to C6 WiFi coprocessor
+    // Must be called before any WiFi API (esp_wifi_init inside ota_server_start)
 
     app_display_init();
     ota_server_start();
@@ -172,9 +175,6 @@ extern "C" void app_main(void)
     xTaskCreatePinnedToCore(can_rx_task, "can_rx", 4096,  NULL, 10, NULL, 0);
     xTaskCreatePinnedToCore(ui_task,     "ui",     12288, NULL,  5, NULL, 1);
 
-    // Mark OTA image valid once tasks are running successfully.
-    // This cancels the rollback watchdog in ota_server.c.
     ota_server_mark_valid();
-
     ESP_LOGI(TAG, "tasks running");
 }

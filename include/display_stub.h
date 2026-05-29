@@ -16,10 +16,16 @@ extern "C" {
 esp_err_t              display_stub_init(lv_display_t **disp_out);
 esp_lcd_panel_handle_t display_stub_get_panel(void);
 
-// Returns pointer to the most recently flushed RGB565 framebuffer.
+// Returns pointer to the most recently completed RGB565 snapshot.
+// Always tear-free — copied from LVGL render buffer under mutex.
 // out_bytes is set to LCD_H_RES * LCD_V_RES * 2.
-// Used by MJPEG streamer.
 void *display_stub_get_fb(size_t *out_bytes);
+
+// Lock/unlock the snapshot buffer for MJPEG encoding.
+// Hold the lock for the duration of jpeg_encoder_process() to
+// ensure the framebuffer doesn't change mid-encode.
+void display_stub_lock(void);
+void display_stub_unlock(void);
 
 #ifdef __cplusplus
 }

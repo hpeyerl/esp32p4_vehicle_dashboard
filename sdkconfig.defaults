@@ -21,7 +21,11 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=10240
 # ── Logging ───────────────────────────────────────────────────
 CONFIG_LOG_DEFAULT_LEVEL_DEBUG=y
 CONFIG_LOG_DEFAULT_LEVEL=4
+
+# ── WiFi remote EAP — disable to avoid build errors ──────────
 CONFIG_ESP_WIFI_REMOTE_EAP_ENABLED=n
+
+# ── WiFi buffers ──────────────────────────────────────────────
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=10
 CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=32
 CONFIG_ESP_WIFI_TX_BUFFER_TYPE=1
@@ -36,14 +40,14 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # ── HTTP server ───────────────────────────────────────────────
 CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
 CONFIG_HTTPD_MAX_URI_LEN=512
+CONFIG_HTTPD_TASK_STACK_SIZE=8192
 
 # ── LVGL — use lv_conf.h instead of Kconfig ──────────────────
-# LVGL's Kconfig sets LV_CONF_SKIP=y by default, which causes
-# lv_conf_internal.h to skip our lv_conf.h entirely and only
-# use Kconfig defaults (only size 14 font enabled by default).
-# Setting n here re-enables lv_conf.h inclusion.
 CONFIG_LV_CONF_SKIP=n
 
+# ── ESP-Hosted (ESP32-P4-Nano: P4 host + C6 slave via SDIO) ──
+# P4-Nano uses SDIO not SPI for P4-to-C6 communication.
+# Confirmed from schematic: GPIO14-19 are SDIO signals.
 CONFIG_ESP_HOSTED_SDIO_HOST_INTERFACE=y
 CONFIG_SLAVE_IDF_TARGET_ESP32C6=y
 CONFIG_ESP_HOSTED_GPIO_HANDSHAKE=16
