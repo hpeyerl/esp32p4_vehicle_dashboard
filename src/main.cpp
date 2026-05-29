@@ -26,6 +26,7 @@
 #include "display_driver.h"   // ← unified API; never include a backend header directly
 #include "ota_server.h"
 #include "vss_sensor.h"
+#include "sdo_manager.h"
 #include "units.h"
 
 #ifndef STRINGIFY
@@ -67,6 +68,8 @@ static void can_rx_task(void *arg)
             uint8_t dlc = msg.data_length_code < 8 ? msg.data_length_code : 8;
             memcpy(data, msg.data, dlc);
             uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+            // Feed SDO responses to SDO manager before dashboard parser
+            sdo_process_frame(&msg);
             xSemaphoreTake(g_dash_mutex, portMAX_DELAY);
             parse_can_frame(msg.identifier, data, now_ms);
             xSemaphoreGive(g_dash_mutex);
@@ -171,6 +174,7 @@ extern "C" void app_main(void)
     ota_server_start();
     vss_sensor_init();
     twai_init();
+    ESP_ERROR_CHECK(sdo_manager_init(NULL, NULL));
 
     xTaskCreatePinnedToCore(can_rx_task, "can_rx", 4096,  NULL, 10, NULL, 0);
     xTaskCreatePinnedToCore(ui_task,     "ui",     12288, NULL,  5, NULL, 1);

@@ -15,6 +15,7 @@ idf_component_register(
         "vss_sensor.c"
         "vss_web_handlers.c"
         "mjpeg_stream.c"
+        "sdo_manager.c"
     INCLUDE_DIRS "."
     REQUIRES
         esp_hosted

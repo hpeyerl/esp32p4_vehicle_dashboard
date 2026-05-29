@@ -20,17 +20,45 @@
 #include "mjpeg_stream.h"
 
 #if DISPLAY_STUB
-static const char s_view_html[] =
-    "<!DOCTYPE html><html><head><meta charset='utf-8'>"
-    "<title>EV Dashboard Stream</title>"
-    "<style>body{margin:0;background:#000;display:flex;justify-content:center;align-items:center;min-height:100vh}"
-    "img{max-width:100%;max-height:100vh;object-fit:contain}</style></head>"
-    "<body><img src='/stream' alt='EV Dashboard'></body></html>";
-
 static esp_err_t prv_view_handler(httpd_req_t *req)
 {
+    // Parse optional ?nav=home|settings|status query param
+    char nav[16] = "home";
+    char query[64] = {};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        char val[16] = {};
+        if (httpd_query_key_value(query, "nav", val, sizeof(val)) == ESP_OK)
+            snprintf(nav, sizeof(nav), "%s", val);
+    }
+
+    char html[1024];
+    snprintf(html, sizeof(html),
+        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        "<title>EV Dashboard</title>"
+        "<style>"
+        "body{margin:0;background:#07090E;color:#eee;font-family:sans-serif}"
+        ".nav{display:flex;background:#0B0F18;border-bottom:1px solid #161C26;padding:8px;gap:8px}"
+        ".nav a{flex:1;text-align:center;padding:8px;background:#161C26;color:#4af;"
+        "text-decoration:none;border-radius:4px;font-size:.85em}"
+        ".nav a.active{background:#4af;color:#000}"
+        ".view{width:100%%;height:calc(100vh - 52px)}"
+        "img{width:100%%;height:100%%;object-fit:contain}"
+        "</style></head><body>"
+        "<div class='nav'>"
+        "<a href='/view?nav=home' class='%s'>🏠 Home</a>"
+        "<a href='/view?nav=settings' class='%s'>⚙️ Settings</a>"
+        "<a href='/view?nav=status' class='%s'>📊 Status</a>"
+        "<a href='/' style='background:#1a2a3a'>🔧 OTA</a>"
+        "</div>"
+        "<div class='view'><img src='/stream' alt='EV Dashboard'></div>"
+        "</body></html>",
+        strcmp(nav,"home")==0     ? "active" : "",
+        strcmp(nav,"settings")==0 ? "active" : "",
+        strcmp(nav,"status")==0   ? "active" : ""
+    );
+
     httpd_resp_set_type(req, "text/html");
-    httpd_resp_sendstr(req, s_view_html);
+    httpd_resp_sendstr(req, html);
     return ESP_OK;
 }
 #endif
@@ -40,6 +68,9 @@ static esp_err_t prv_view_handler(httpd_req_t *req)
 #include "esp_check.h"
 #include "esp_wifi.h"
 
+#ifdef IDF_CMAKE_BUILD
+extern esp_err_t esp_hosted_init(void);
+#endif
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_http_server.h"
@@ -109,6 +140,10 @@ static void prv_wifi_event_handler(void *arg, esp_event_base_t base,
 // ── One-time WiFi stack init (shared by STA and AP paths) ───────────────
 static esp_err_t prv_wifi_common_init(void)
 {
+#ifdef IDF_CMAKE_BUILD
+    // Initialize ESP-Hosted SDIO transport to C6 WiFi coprocessor
+    ESP_RETURN_ON_ERROR(esp_hosted_init(), TAG, "esp_hosted_init failed");
+#endif
     ESP_ERROR_CHECK(esp_netif_init());
     esp_err_t err = esp_event_loop_create_default();
     // ESP_ERR_INVALID_STATE means already created — that's fine
@@ -208,6 +243,14 @@ static const char s_html[] =
 "</style></head><body>"
 "<h1>EV Dashboard OTA</h1>"
 "<p id='ver'>Loading...</p>"
+"<div style='display:flex;gap:8px;margin-bottom:16px'>"
+"<a href='/view' style='flex:1;text-align:center;padding:10px;background:#1a2a3a;color:#4af;"
+"text-decoration:none;border-radius:4px;font-size:.9em'>📺 Live View</a>"
+"<a href='/view?nav=settings' style='flex:1;text-align:center;padding:10px;background:#1a2a3a;color:#4af;"
+"text-decoration:none;border-radius:4px;font-size:.9em'>⚙️ Settings</a>"
+"<a href='/view?nav=status' style='flex:1;text-align:center;padding:10px;background:#1a2a3a;color:#4af;"
+"text-decoration:none;border-radius:4px;font-size:.9em'>📊 Status</a>"
+"</div>"
 "<div id='drop' onclick='document.getElementById(\"file\").click()'>"
 "  Drop firmware.bin here<br><small>or click to browse</small>"
 "  <input type='file' id='file' accept='.bin'>"

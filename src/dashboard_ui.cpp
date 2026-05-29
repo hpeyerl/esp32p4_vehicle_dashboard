@@ -19,6 +19,7 @@
 // =============================================================
 
 #include "dashboard_ui.h"
+#include "dashboard_layout.h"
 #include "can_signals.h"
 #include "units.h"
 #include "lvgl.h"
@@ -43,19 +44,11 @@ LV_FONT_DECLARE(lv_font_montserrat_110)
 #define CLR_WHITE       lv_color_hex(0xFFFFFF)
 #define CLR_ORANGE      lv_color_hex(0xF59E0B)
 
-// ── Layout ────────────────────────────────────────────────────────────────
-#define LEFT_W    380    // left panel width
-#define RIGHT_W   280    // right panel width
-#define BOT_H      52    // bottom bar height
-#define PWR_FULL   200.0f
+// ── Layout — see dashboard_layout.h (selected by DISPLAY_TARGET) ─────────
+// Layout constants (LEFT_W, RIGHT_W, BOT_H, ARC_R, METER_R etc.)
+// are defined in layout_waveshare.h / layout_tab5.h / layout_stub.h
 
-// ── Meter gauge geometry ──────────────────────────────────────────────────
-// Half-circle, flat side down, opens upward.
-// LVGL arc: angle 0=3-o'clock, goes CW.
-// For flat-bottom half circle: bg_start=180, bg_end=360 (=0).
-// Needle: line from center outward at angle corresponding to value.
-#define METER_R    56    // arc radius
-#define METER_W    10    // arc stroke width
+// Meter spacing — not in layout header since it's derived from screen height
 #define METER_GAP  90    // vertical spacing between meter centers
 
 // ── Widget handles ────────────────────────────────────────────────────────
@@ -263,7 +256,7 @@ void dashboard_ui_create(lv_display_t *disp)
 
     const lv_coord_t W      = LCD_H_RES;
     const lv_coord_t H      = LCD_V_RES;
-    const lv_coord_t MAIN_H = H;
+    const lv_coord_t MAIN_H = H - BOT_H;  // leave room for nav bar
 
 
     // ── Left panel — bracket shape via radius on inner-top and inner-bottom corners
@@ -312,10 +305,7 @@ void dashboard_ui_create(lv_display_t *disp)
     // Center at (LEFT_W + ARC_R, MAIN_H/2), radius ARC_R.
     // Sweep from 120° to 240° (CW) = left-facing 120° arc.
     // 50% thicker than SVG sketch: stroke width = 21
-    #define ARC_R      300   // arc radius
-    #define ARC_W       21   // arc stroke width (50% thicker)
-    #define ARC_START  120   // start angle (degrees, LVGL convention)
-    #define ARC_END    240   // end angle
+    // ARC_R, ARC_W, ARC_START, ARC_END from dashboard_layout.h
 
     lv_coord_t soc_cx = LEFT_W + ARC_R;    // center x — off right edge of left panel
     lv_coord_t soc_cy = MAIN_H / 2;         // center y — vertical midpoint
@@ -407,8 +397,7 @@ void dashboard_ui_create(lv_display_t *disp)
     // ── Power arc — ")" shape ─────────────────────────────────────────────
     // Mirror of SOC arc. Center to the LEFT of right panel edge.
     // Sweep from 300° to 60° (CW) = right-facing 120° arc.
-    #define PWR_ARC_START  300
-    #define PWR_ARC_END     60
+    // PWR_ARC_START, PWR_ARC_END from dashboard_layout.h
 
     lv_coord_t pwr_cx = W - RIGHT_W - ARC_R;
     lv_coord_t pwr_cy = MAIN_H / 2;
@@ -511,14 +500,45 @@ void dashboard_ui_create(lv_display_t *disp)
                               &lv_font_montserrat_48);
     lv_obj_align(s_lbl_aux_v, LV_ALIGN_TOP_LEFT, 0, 226);
 
-    // ── CAN indicator dot (bottom-right of screen) ───────────────────────
+    // ── CAN indicator dot ────────────────────────────────────────────────
     s_dot_can = lv_obj_create(scr);
     lv_obj_set_size(s_dot_can, 10, 10);
     lv_obj_set_style_radius(s_dot_can, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(s_dot_can, CLR_GREEN, 0);
     lv_obj_set_style_bg_opa(s_dot_can, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_dot_can, 0, 0);
-    lv_obj_set_pos(s_dot_can, W - 16, H - 16);
+    lv_obj_set_pos(s_dot_can, W - 16, H - BOT_H - 16);
+
+    // ── Bottom nav bar ────────────────────────────────────────────────────
+    lv_obj_t *nav = lv_obj_create(scr);
+    lv_obj_set_pos(nav, 0, H - BOT_H);
+    lv_obj_set_size(nav, W, BOT_H);
+    lv_obj_set_style_bg_color(nav, CLR_PANEL, 0);
+    lv_obj_set_style_bg_opa(nav, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(nav, 1, 0);
+    lv_obj_set_style_border_color(nav, CLR_BORDER, 0);
+    lv_obj_set_style_border_side(nav, LV_BORDER_SIDE_TOP, 0);
+    lv_obj_set_style_radius(nav, 0, 0);
+    lv_obj_set_style_pad_all(nav, 0, 0);
+    lv_obj_clear_flag(nav, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Nav icons — stub labels for now, replaced by icons when screens exist
+    const char *nav_labels[] = {"  HOME  ", "SETTINGS", " STATUS "};
+    for (int i = 0; i < NAV_ICON_CNT; i++) {
+        lv_obj_t *btn = lv_obj_create(nav);
+        lv_obj_set_size(btn, NAV_ICON_W, BOT_H - 4);
+        lv_obj_set_pos(btn, W/2 - (NAV_ICON_CNT * NAV_ICON_W)/2 + i * NAV_ICON_W, 2);
+        lv_obj_set_style_bg_color(btn, i == 0 ? CLR_CYAN : CLR_PANEL, 0);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(btn, 0, 0);
+        lv_obj_set_style_radius(btn, 6, 0);
+        lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, nav_labels[i]);
+        lv_obj_set_style_text_color(lbl, i == 0 ? CLR_BG : CLR_TEXT_MID, 0);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+        lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 0);
+    }
 }
 
 // ── dashboard_ui_update ───────────────────────────────────────────────────
