@@ -18,6 +18,8 @@
 #include "wifi_config.h"
 #include "vss_web_handlers.h"
 #include "mjpeg_stream.h"
+#include "settings_page.h"
+#include "status_page.h"
 
 #if DISPLAY_STUB
 static esp_err_t prv_view_handler(httpd_req_t *req)
@@ -46,9 +48,9 @@ static esp_err_t prv_view_handler(httpd_req_t *req)
         "</style></head><body>"
         "<div class='nav'>"
         "<a href='/view?nav=home' class='%s'>🏠 Home</a>"
-        "<a href='/view?nav=settings' class='%s'>⚙️ Settings</a>"
-        "<a href='/view?nav=status' class='%s'>📊 Status</a>"
-        "<a href='/' style='background:#1a2a3a'>🔧 OTA</a>"
+        "<a href='/settings' target='_blank' class='%s'>⚙️ Settings</a>"
+        "<a href='/status-page' target='_blank' class='%s'>📊 Status</a>"
+        "<a href='/ota' target='_blank' style='background:#1a2a3a'>🔧 OTA</a>"
         "</div>"
         "<div class='view'><img src='/stream' alt='EV Dashboard'></div>"
         "</body></html>",
@@ -175,15 +177,10 @@ static esp_err_t prv_wifi_sta_init(void)
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
     ESP_ERROR_CHECK(esp_wifi_start());
-    // connect is triggered by WIFI_EVENT_STA_START in the event handler
-
-    EventBits_t bits = xEventGroupWaitBits(s_wifi_eg,
-        WIFI_CONNECTED_BIT | WIFI_FAIL_BIT, pdFALSE, pdFALSE,
-        pdMS_TO_TICKS(20000));
-
-    if (bits & WIFI_CONNECTED_BIT) return ESP_OK;
-    ESP_LOGE(TAG, "WiFi STA connect failed");
-    return ESP_FAIL;
+    // Connection happens asynchronously via event handler.
+    // Return immediately so display can start without waiting for WiFi.
+    ESP_LOGI(TAG, "WiFi STA connecting in background...");
+    return ESP_OK;
 }
 
 static esp_err_t prv_wifi_ap_init(void)
@@ -241,6 +238,11 @@ static const char s_html[] =
 "#progress{width:100%;height:8px;background:#222;border-radius:4px;margin-top:8px;display:none}"
 "#bar{height:100%;width:0;background:#4af;border-radius:4px;transition:width .3s}"
 "</style></head><body>"
+"<div class='nav'><a href='/view'>🏠 Home</a><a href='/settings'>⚙️ Settings</a>"
+"<a href='/status-page'>📊 Status</a><a href='/ota' class='active'>🔧 OTA</a></div>"
+"<style>.nav{display:flex;background:#0B0F18;border-bottom:1px solid #333;padding:8px;gap:8px;margin:-40px -16px 16px}"
+".nav a{flex:1;text-align:center;padding:8px;background:#1a2a3a;color:#4af;text-decoration:none;border-radius:4px;font-size:.85em}"
+".nav a.active{background:#4af;color:#000}</style>"
 "<h1>EV Dashboard OTA</h1>"
 "<p id='ver'>Loading...</p>"
 "<div style='display:flex;gap:8px;margin-bottom:16px'>"
@@ -308,11 +310,19 @@ static const char s_html[] =
 "</script></body></html>";
 
 // ── HTTP handlers ─────────────────────────────────────────────────────────
-static esp_err_t prv_get_root(httpd_req_t *req)
+static esp_err_t prv_get_ota(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     return httpd_resp_send(req, s_html, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t prv_get_root(httpd_req_t *req)
+{
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", "/view");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
 }
 
 static esp_err_t prv_get_status(httpd_req_t *req)
@@ -438,20 +448,24 @@ static void prv_httpd_start(void)
 {
     httpd_config_t cfg    = HTTPD_DEFAULT_CONFIG();
     cfg.server_port       = OTA_HTTP_PORT;
-    cfg.max_uri_handlers  = 10;
+    cfg.max_uri_handlers  = 16;
     cfg.recv_wait_timeout = 30;
     cfg.send_wait_timeout = 30;
     cfg.max_resp_headers  = 8;
+    cfg.max_open_sockets  = 7;  // allow MJPEG + OTA simultaneously
+    cfg.lru_purge_enable  = true;  // evict oldest connection if needed
 
     httpd_handle_t server = NULL;
     ESP_ERROR_CHECK(httpd_start(&server, &cfg));
 
     httpd_uri_t root   = { .uri="/",       .method=HTTP_GET,  .handler=prv_get_root   };
+    httpd_uri_t ota_pg = { .uri="/ota",    .method=HTTP_GET,  .handler=prv_get_ota    };
     httpd_uri_t status = { .uri="/status", .method=HTTP_GET,  .handler=prv_get_status };
     httpd_uri_t update = { .uri="/update", .method=HTTP_POST, .handler=prv_post_update,
                            .user_ctx=NULL };
 
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &root));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &ota_pg));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &status));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &update));
     vss_register_handlers(server);
@@ -467,6 +481,8 @@ static void prv_httpd_start(void)
     ESP_LOGI(TAG, "/view registration result: 0x%x", view_err);
     ESP_ERROR_CHECK(view_err);
     ESP_LOGI(TAG, "MJPEG viewer: http://ev-dashboard.local/view");
+    settings_page_register(server);
+    status_page_register(server);
 #endif
 
     ESP_LOGI(TAG, "HTTP server started on port %d", OTA_HTTP_PORT);
@@ -528,10 +544,7 @@ esp_err_t ota_server_start(void)
     ESP_ERROR_CHECK(prv_wifi_ap_init());
 #else
     ESP_LOGI(TAG, "WiFi mode: STA  SSID=%s", OTA_STA_SSID);
-    if (prv_wifi_sta_init() != ESP_OK) {
-        ESP_LOGW(TAG, "STA failed — falling back to AP");
-        ESP_ERROR_CHECK(prv_wifi_ap_init());
-    }
+    ESP_ERROR_CHECK(prv_wifi_sta_init());
 #endif
 
     prv_mdns_init();

@@ -703,3 +703,15 @@ void dashboard_ui_update(const DashData *d)
     // ── Invalidate ────────────────────────────────────────────────────────
     lv_obj_invalidate(lv_screen_active());
 }
+// ?? C-compatible g_dash getters (used by status_page.c) ??????
+extern "C" {
+float dash_get_speed(void)        { return g_dash.speed; }
+float dash_get_soc(void)          { return g_dash.soc_pct; }
+float dash_get_power_kw(void)     { return g_dash.power_kw; }
+float dash_get_pack_volts(void)   { return g_dash.pack_volts; }
+float dash_get_pack_amps(void)    { return g_dash.pack_amps; }
+float dash_get_inverter_temp(void){ return g_dash.inverter_temp_c; }
+float dash_get_motor_temp(void)   { return g_dash.motor_temp_c; }
+float dash_get_batt_temp(void)    { return g_dash.batt_temp_c; }
+float dash_get_aux_volts(void)    { return g_dash.aux_volts; }
+}

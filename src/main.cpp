@@ -151,6 +151,17 @@ static void ui_task(void *arg)
     }
 }
 
+
+static void prv_bg_init_task(void *arg)
+{
+    // Runs after display and CAN are up — WiFi/OTA/SDO can be slow
+    ota_server_start();
+    sdo_manager_init(NULL, NULL);
+    ota_server_mark_valid();
+    ESP_LOGI("bg_init", "background init complete");
+    vTaskDelete(NULL);
+}
+
 extern "C" void app_main(void)
 {
 #if DISPLAY_TARGET == DISPLAY_TARGET_TAB5
@@ -171,14 +182,13 @@ extern "C" void app_main(void)
     // Must be called before any WiFi API (esp_wifi_init inside ota_server_start)
 
     app_display_init();
-    ota_server_start();
     vss_sensor_init();
     twai_init();
-    ESP_ERROR_CHECK(sdo_manager_init(NULL, NULL));
 
     xTaskCreatePinnedToCore(can_rx_task, "can_rx", 4096,  NULL, 10, NULL, 0);
     xTaskCreatePinnedToCore(ui_task,     "ui",     12288, NULL,  5, NULL, 1);
 
-    ota_server_mark_valid();
+    // Start WiFi/OTA/SDO in background — display and CAN are already running
+    xTaskCreate(prv_bg_init_task, "bg_init", 8192, NULL, 3, NULL);
     ESP_LOGI(TAG, "tasks running");
 }
