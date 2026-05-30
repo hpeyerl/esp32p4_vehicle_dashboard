@@ -5,10 +5,10 @@ OTA_HOST = ev-dashboard.local
 all: build
 
 build:
-    pio run -e $(ENV)
+	pio run -e $(ENV)
 
 ota:
-    curl -X POST http://$(OTA_HOST)/update \
+	curl -X POST http://$(OTA_HOST)/update \
       -H "Content-Type: application/octet-stream" \
       -H "Expect:" \
       --data-binary @$(FIRMWARE) \
