@@ -13,13 +13,17 @@
 #define PWR_FULL    200.0f
 
 // ── SOC / Power arc geometry ──────────────────────────────────
-// Smaller radius brackets the speed tighter on a wide screen
-#define ARC_R       220    // arc radius
-#define ARC_W        18    // arc stroke width
-#define ARC_START   120    // SOC arc start angle (LVGL degrees)
-#define ARC_END     240    // SOC arc end angle
-#define PWR_ARC_START 300
-#define PWR_ARC_END    60
+// 160° sweep, ARC_R=320 tuned for 1280×720 MJPEG preview.
+// Inner edge of each bracket lands ~176px from speed center (x≈640).
+// Arc height ≈ 630px — nearly full screen height.
+// Revisit ARC_R for 1920×720 when real display arrives.
+#define ARC_R       320    // arc radius (affects size/height only)
+#define ARC_INSET   700    // distance from panel edge to arc center (affects position)
+#define ARC_W        50    // arc stroke width
+#define ARC_START   100    // SOC arc: 100°→260° = 160° CW sweep
+#define ARC_END     260
+#define PWR_ARC_START 280  // PWR arc: 280°→80° = 160° CW sweep (symmetric)
+#define PWR_ARC_END    80
 
 // ── Meter gauge geometry ──────────────────────────────────────
 #define METER_R      52    // arc radius

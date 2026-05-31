@@ -318,7 +318,7 @@ void dashboard_ui_create(lv_display_t *disp)
     // 50% thicker than SVG sketch: stroke width = 21
     // ARC_R, ARC_W, ARC_START, ARC_END from dashboard_layout.h
 
-    lv_coord_t soc_cx = LEFT_W + ARC_R;    // center x — off right edge of left panel
+    lv_coord_t soc_cx = LEFT_W + ARC_INSET;    // center x — off right edge of left panel
     lv_coord_t soc_cy = MAIN_H / 2;         // center y — vertical midpoint
 
     // SOC track (gray outline)
@@ -410,7 +410,7 @@ void dashboard_ui_create(lv_display_t *disp)
     // Sweep from 300° to 60° (CW) = right-facing 120° arc.
     // PWR_ARC_START, PWR_ARC_END from dashboard_layout.h
 
-    lv_coord_t pwr_cx = W - RIGHT_W - ARC_R;
+    lv_coord_t pwr_cx = W - RIGHT_W - ARC_INSET;
     lv_coord_t pwr_cy = MAIN_H / 2;
 
     // Power track (gray)

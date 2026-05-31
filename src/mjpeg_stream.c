@@ -38,14 +38,13 @@ static void prv_rgb565_to_rgb888(const uint16_t *src, uint8_t *dst, int w, int h
     const size_t n = (size_t)w * h;
     for (size_t i = 0; i < n; i++) {
         uint16_t px = src[i];
-        // LVGL stores RGB565 big-endian on ESP32 — swap bytes
-        px = (px >> 8) | (px << 8);
+        // LV_COLOR_16_SWAP=0: native little-endian RGB565, no swap needed
         uint8_t r = (px >> 11) & 0x1F;
         uint8_t g = (px >>  5) & 0x3F;
         uint8_t b = (px      ) & 0x1F;
-        dst[i*3 + 0] = (r << 3) | (r >> 2);
+        dst[i*3 + 0] = (b << 3) | (b >> 2);
         dst[i*3 + 1] = (g << 2) | (g >> 4);
-        dst[i*3 + 2] = (b << 3) | (b >> 2);
+        dst[i*3 + 2] = (r << 3) | (r >> 2);
     }
 }
 
