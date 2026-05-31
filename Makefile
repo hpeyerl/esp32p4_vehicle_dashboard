@@ -2,7 +2,7 @@ ENV = stub_debug
 FIRMWARE = .pio/build/$(ENV)/firmware.bin
 OTA_HOST = ev-dashboard.local
 
-all: build
+all: deploy
 
 build:
 	pio run -e $(ENV)

@@ -245,10 +245,21 @@ static void update_needle(Meter *m, float pct)
     lv_obj_invalidate(m->needle);
 }
 
+// ── Screen management ────────────────────────────────────────
+static lv_obj_t    *s_scr_home     = NULL;
+static lv_obj_t    *s_scr_settings = NULL;
+static lv_obj_t    *s_scr_status   = NULL;
+static dash_screen_t s_cur_screen  = DASH_SCREEN_HOME;
+static lv_display_t *s_disp        = NULL;
+static volatile dash_screen_t s_pending_screen    = DASH_SCREEN_HOME;
+static volatile bool          s_screen_change_req = false;
+
 // ── dashboard_ui_create ───────────────────────────────────────────────────
 void dashboard_ui_create(lv_display_t *disp)
 {
+    s_disp = disp;
     lv_obj_t *scr = lv_display_get_screen_active(disp);
+    s_scr_home = scr;
     lv_obj_set_style_bg_color(scr, CLR_BG, 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_all(scr, 0, 0);
@@ -540,10 +551,32 @@ void dashboard_ui_create(lv_display_t *disp)
         lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 0);
     }
 }
+// Forward declarations for screen helpers
+static void prv_ensure_settings_screen(void);
+static void prv_ensure_status_screen(void);
 
 // ── dashboard_ui_update ───────────────────────────────────────────────────
 void dashboard_ui_update(const DashData *d)
 {
+    // ── Pending screen switch (set from httpd task via dashboard_ui_set_screen) ─
+    if (s_screen_change_req) {
+        s_screen_change_req = false;
+        switch (s_pending_screen) {
+            case DASH_SCREEN_HOME:
+                if (s_scr_home) lv_screen_load(s_scr_home);
+                break;
+            case DASH_SCREEN_SETTINGS:
+                prv_ensure_settings_screen();
+                lv_screen_load(s_scr_settings);
+                break;
+            case DASH_SCREEN_STATUS:
+                prv_ensure_status_screen();
+                lv_screen_load(s_scr_status);
+                break;
+        }
+        s_cur_screen = s_pending_screen;
+    }
+
     char buf[32];
 
     // ── Meter gauge update helper ─────────────────────────────────────────
@@ -703,7 +736,52 @@ void dashboard_ui_update(const DashData *d)
     // ── Invalidate ────────────────────────────────────────────────────────
     lv_obj_invalidate(lv_screen_active());
 }
-// ?? C-compatible g_dash getters (used by status_page.c) ??????
+
+// ── Screen switch implementation ──────────────────────────────
+static void prv_ensure_settings_screen(void)
+{
+    if (s_scr_settings) return;
+    s_scr_settings = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(s_scr_settings, CLR_BG, 0);
+    lv_obj_set_style_bg_opa(s_scr_settings, LV_OPA_COVER, 0);
+
+    lv_obj_t *lbl = lv_label_create(s_scr_settings);
+    lv_label_set_text(lbl, "Settings\nUse browser: http://ev-dashboard.local/settings");
+    lv_obj_set_style_text_color(lbl, CLR_TEXT_MID, 0);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+    lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+}
+
+static void prv_ensure_status_screen(void)
+{
+    if (s_scr_status) return;
+    s_scr_status = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(s_scr_status, CLR_BG, 0);
+    lv_obj_set_style_bg_opa(s_scr_status, LV_OPA_COVER, 0);
+
+    lv_obj_t *lbl = lv_label_create(s_scr_status);
+    lv_label_set_text(lbl, "Status\nUse browser: http://ev-dashboard.local/status-page");
+    lv_obj_set_style_text_color(lbl, CLR_TEXT_MID, 0);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+    lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+}
+
+extern "C" void dashboard_ui_set_screen(dash_screen_t screen)
+{
+    // Queue the screen switch — actual LVGL call happens in dashboard_ui_update()
+    // on the UI task, since LVGL is not thread-safe.
+    s_pending_screen    = screen;
+    s_screen_change_req = true;
+}
+
+extern "C" dash_screen_t dashboard_ui_get_screen(void)
+{
+    return s_cur_screen;
+}
+
+// ── C-compatible g_dash getters (used by status_page.c) ──────
 extern "C" {
 float dash_get_speed(void)        { return g_dash.speed; }
 float dash_get_soc(void)          { return g_dash.soc_pct; }

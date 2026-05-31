@@ -1,25 +1,40 @@
 // =============================================================
-//  ota_server.c — Web-based OTA firmware update server
-//
-//  Provides:
-//    GET  /          — browser UI (drag-and-drop or file picker)
-//    POST /update    — raw binary upload endpoint (curl-friendly)
-//    GET  /status    — JSON: current fw version, partition, IP
-//
-//  Rollback safety:
-//    New firmware must call ota_server_mark_valid() (which calls
-//    esp_ota_mark_app_valid_cancel_rollback) or the bootloader
-//    reverts to the previous image on the next reboot.
-//    A watchdog task enforces this — if mark_valid() hasn't been
-//    called within OTA_VALID_TIMEOUT_MS of boot, it reboots.
+//  ota_server.c — Web OTA server + HTTP server init
 // =============================================================
 
 #include "ota_server.h"
+#include "wifi_manager.h"
 #include "wifi_config.h"
 #include "vss_web_handlers.h"
 #include "mjpeg_stream.h"
 #include "settings_page.h"
 #include "status_page.h"
+#include "dashboard_ui.h"
+#include "esp_log.h"
+#include "esp_check.h"
+#include "esp_http_server.h"
+#include "esp_ota_ops.h"
+#include "esp_app_desc.h"
+#include "esp_system.h"
+#include "esp_timer.h"
+#include "esp_netif.h"
+#include "nvs_flash.h"
+#include "mdns.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include <string.h>
+#include <stdio.h>
+
+static const char *TAG = "ota";
+
+#ifndef OTA_VALID_TIMEOUT_MS
+  #define OTA_VALID_TIMEOUT_MS  30000
+#endif
+#define OTA_WIFI_MODE_STA 1
+#define OTA_WIFI_MODE_AP  2
+#ifndef OTA_WIFI_MODE
+  #define OTA_WIFI_MODE OTA_WIFI_MODE_STA
+#endif
 
 #if DISPLAY_STUB
 static esp_err_t prv_view_handler(httpd_req_t *req)
@@ -52,7 +67,7 @@ static esp_err_t prv_view_handler(httpd_req_t *req)
         "<a href='/status-page' target='_blank' class='%s'>📊 Status</a>"
         "<a href='/ota' target='_blank' style='background:#1a2a3a'>🔧 OTA</a>"
         "</div>"
-        "<div class='view'><img src='/stream' alt='EV Dashboard'></div>"
+        "<div class='view'><img src='http://ev-dashboard.local:81/stream' alt='EV Dashboard'></div>"
         "</body></html>",
         strcmp(nav,"home")==0     ? "active" : "",
         strcmp(nav,"settings")==0 ? "active" : "",
@@ -64,159 +79,6 @@ static esp_err_t prv_view_handler(httpd_req_t *req)
     return ESP_OK;
 }
 #endif
-
-
-#include "esp_log.h"
-#include "esp_check.h"
-#include "esp_wifi.h"
-
-#ifdef IDF_CMAKE_BUILD
-extern esp_err_t esp_hosted_init(void);
-#endif
-#include "esp_event.h"
-#include "esp_netif.h"
-#include "esp_http_server.h"
-#include "esp_ota_ops.h"
-#include "esp_app_desc.h"
-#include "esp_system.h"
-#include "esp_timer.h"
-#include "nvs_flash.h"
-#include "mdns.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/event_groups.h"
-#include <string.h>
-#include <stdio.h>
-
-static const char *TAG = "ota";
-
-#ifndef OTA_VALID_TIMEOUT_MS
-  #define OTA_VALID_TIMEOUT_MS  30000
-#endif
-
-// Must define mode constants before using them in #if
-#define OTA_WIFI_MODE_STA 1
-#define OTA_WIFI_MODE_AP  2
-#ifndef OTA_WIFI_MODE
-  #define OTA_WIFI_MODE OTA_WIFI_MODE_STA
-#endif
-
-// ── WiFi event handling ───────────────────────────────────────────────────
-static EventGroupHandle_t s_wifi_eg;
-#define WIFI_CONNECTED_BIT BIT0
-#define WIFI_FAIL_BIT      BIT1
-static int s_retry = 0;
-#define WIFI_MAX_RETRY 10
-
-static void prv_wifi_event_handler(void *arg, esp_event_base_t base,
-                                   int32_t id, void *data)
-{
-    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
-        ESP_LOGD(TAG, "WiFi STA started — connecting");
-    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        if (s_retry < WIFI_MAX_RETRY) {
-            esp_wifi_connect();
-            s_retry++;
-            ESP_LOGW(TAG, "WiFi retry %d/%d", s_retry, WIFI_MAX_RETRY);
-        } else {
-            xEventGroupSetBits(s_wifi_eg, WIFI_FAIL_BIT);
-        }
-    } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t *e = (ip_event_got_ip_t *)data;
-        ESP_LOGI(TAG, "WiFi connected  IP=" IPSTR, IP2STR(&e->ip_info.ip));
-        ESP_LOGI(TAG, "OTA UI:  http://" IPSTR "/", IP2STR(&e->ip_info.ip));
-        ESP_LOGI(TAG, "OTA URL: http://" IPSTR "/update", IP2STR(&e->ip_info.ip));
-        ESP_LOGI(TAG, "mDNS:    http://%s.local/", OTA_MDNS_HOSTNAME);
-        s_retry = 0;
-        xEventGroupSetBits(s_wifi_eg, WIFI_CONNECTED_BIT);
-    } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STACONNECTED) {
-        wifi_event_ap_staconnected_t *e = (wifi_event_ap_staconnected_t *)data;
-        // MACSTR can't be used inside ESP_LOGI string concatenation — expand manually
-        ESP_LOGI(TAG, "AP: client connected  MAC=%02x:%02x:%02x:%02x:%02x:%02x",
-                 e->mac[0], e->mac[1], e->mac[2],
-                 e->mac[3], e->mac[4], e->mac[5]);
-    }
-}
-
-// ── One-time WiFi stack init (shared by STA and AP paths) ───────────────
-static esp_err_t prv_wifi_common_init(void)
-{
-#ifdef IDF_CMAKE_BUILD
-    // Initialize ESP-Hosted SDIO transport to C6 WiFi coprocessor
-    ESP_RETURN_ON_ERROR(esp_hosted_init(), TAG, "esp_hosted_init failed");
-#endif
-    ESP_ERROR_CHECK(esp_netif_init());
-    esp_err_t err = esp_event_loop_create_default();
-    // ESP_ERR_INVALID_STATE means already created — that's fine
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE)
-        return err;
-    return ESP_OK;
-}
-
-static esp_err_t prv_wifi_sta_init(void)
-{
-    s_wifi_eg = xEventGroupCreate();
-    ESP_RETURN_ON_ERROR(prv_wifi_common_init(), TAG, "wifi common init failed");
-    esp_netif_create_default_wifi_sta();
-
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-
-    esp_event_handler_instance_t h_any, h_ip;
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(
-        WIFI_EVENT, ESP_EVENT_ANY_ID, prv_wifi_event_handler, NULL, &h_any));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(
-        IP_EVENT, IP_EVENT_STA_GOT_IP, prv_wifi_event_handler, NULL, &h_ip));
-
-    wifi_config_t wc = {};
-    strlcpy((char *)wc.sta.ssid,     OTA_STA_SSID,     sizeof(wc.sta.ssid));
-    strlcpy((char *)wc.sta.password, OTA_STA_PASSWORD, sizeof(wc.sta.password));
-    wc.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
-    ESP_ERROR_CHECK(esp_wifi_start());
-    // Connection happens asynchronously via event handler.
-    // Return immediately so display can start without waiting for WiFi.
-    ESP_LOGI(TAG, "WiFi STA connecting in background...");
-    return ESP_OK;
-}
-
-static esp_err_t prv_wifi_ap_init(void)
-{
-    // Common init may have already been called by STA path — that's fine
-    ESP_RETURN_ON_ERROR(prv_wifi_common_init(), TAG, "wifi common init failed");
-    esp_netif_t *ap_netif = esp_netif_create_default_wifi_ap();
-    (void)ap_netif;
-
-    // Only init WiFi driver if STA path didn't already do it
-    // esp_wifi_init is idempotent when called with the same config
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    esp_err_t err = esp_wifi_init(&cfg);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE)
-        ESP_ERROR_CHECK(err);
-
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(
-        WIFI_EVENT, ESP_EVENT_ANY_ID, prv_wifi_event_handler, NULL, NULL));
-
-    wifi_config_t wc = {};
-    strlcpy((char *)wc.ap.ssid,     OTA_AP_SSID,     sizeof(wc.ap.ssid));
-    strlcpy((char *)wc.ap.password, OTA_AP_PASSWORD, sizeof(wc.ap.password));
-    wc.ap.channel        = OTA_AP_CHANNEL;
-    wc.ap.max_connection = OTA_AP_MAX_CONN;
-    wc.ap.authmode       = strlen(OTA_AP_PASSWORD) ? WIFI_AUTH_WPA2_PSK
-                                                    : WIFI_AUTH_OPEN;
-
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wc));
-    ESP_ERROR_CHECK(esp_wifi_start());
-
-    ESP_LOGI(TAG, "AP started  SSID=%s", OTA_AP_SSID);
-    ESP_LOGI(TAG, "OTA UI:  http://192.168.4.1/");
-    ESP_LOGI(TAG, "OTA URL: http://192.168.4.1/update");
-    return ESP_OK;
-}
 
 // ── HTML UI ───────────────────────────────────────────────────────────────
 static const char s_html[] =
@@ -444,6 +306,29 @@ static void prv_mdns_init(void)
 }
 
 // ── HTTP server ───────────────────────────────────────────────────────────
+
+#if DISPLAY_STUB
+static esp_err_t prv_nav_handler(httpd_req_t *req)
+{
+    char query[32] = {};
+    char screen[16] = "home";
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK)
+        httpd_query_key_value(query, "screen", screen, sizeof(screen));
+
+    dash_screen_t scr = DASH_SCREEN_HOME;
+    if      (strcmp(screen, "settings") == 0) scr = DASH_SCREEN_SETTINGS;
+    else if (strcmp(screen, "status")   == 0) scr = DASH_SCREEN_STATUS;
+
+    dashboard_ui_set_screen(scr);
+
+    httpd_resp_set_type(req, "application/json");
+    char buf[48];
+    snprintf(buf, sizeof(buf), "{\"ok\":true,\"screen\":\"%s\"}", screen);
+    httpd_resp_sendstr(req, buf);
+    return ESP_OK;
+}
+#endif
+
 static void prv_httpd_start(void)
 {
     httpd_config_t cfg    = HTTPD_DEFAULT_CONFIG();
@@ -471,9 +356,7 @@ static void prv_httpd_start(void)
     vss_register_handlers(server);
 
 #if DISPLAY_STUB
-    httpd_uri_t stream = { .uri="/stream", .method=HTTP_GET,
-                           .handler=mjpeg_stream_handler };
-    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &stream));
+    // Stream runs on port 81 (separate server) — started below
     ESP_LOGI(TAG, "registering /view handler...");
     httpd_uri_t view = { .uri="/view", .method=HTTP_GET,
                          .handler=prv_view_handler };
@@ -483,6 +366,10 @@ static void prv_httpd_start(void)
     ESP_LOGI(TAG, "MJPEG viewer: http://ev-dashboard.local/view");
     settings_page_register(server);
     status_page_register(server);
+    mjpeg_server_start();  // stream on port 81
+    httpd_uri_t nav = { .uri="/nav", .method=HTTP_GET,
+                        .handler=prv_nav_handler };
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &nav));
 #endif
 
     ESP_LOGI(TAG, "HTTP server started on port %d", OTA_HTTP_PORT);
@@ -541,10 +428,10 @@ esp_err_t ota_server_start(void)
 
 #if OTA_WIFI_MODE == OTA_WIFI_MODE_AP
     ESP_LOGI(TAG, "WiFi mode: AP  SSID=%s", OTA_AP_SSID);
-    ESP_ERROR_CHECK(prv_wifi_ap_init());
+    ESP_ERROR_CHECK(wifi_manager_start_ap());
 #else
     ESP_LOGI(TAG, "WiFi mode: STA  SSID=%s", OTA_STA_SSID);
-    ESP_ERROR_CHECK(prv_wifi_sta_init());
+    ESP_ERROR_CHECK(wifi_manager_start_sta());
 #endif
 
     prv_mdns_init();

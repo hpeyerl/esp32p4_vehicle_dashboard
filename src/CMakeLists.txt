@@ -8,6 +8,7 @@ idf_component_register(
         "tab5_display.c"
         "waveshare_display.c"
         "ota_server.c"
+        "wifi_manager.c"
         "can_parser.cpp"
         "dashboard_ui.cpp"
         "lv_font_montserrat_110.c"

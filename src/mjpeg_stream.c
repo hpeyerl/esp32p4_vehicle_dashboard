@@ -159,3 +159,30 @@ esp_err_t mjpeg_stream_handler(httpd_req_t *req)
     ESP_LOGI(TAG, "stream closed  %d frames", frames);
     return ESP_OK;
 }
+
+// ── Dedicated stream server on port 81 ───────────────────────
+// Runs independently from main httpd so MJPEG never blocks OTA/nav.
+
+#include "esp_http_server.h"
+
+static httpd_handle_t s_stream_server = NULL;
+
+esp_err_t mjpeg_server_start(void)
+{
+    httpd_config_t cfg    = HTTPD_DEFAULT_CONFIG();
+    cfg.server_port       = 81;
+    cfg.ctrl_port         = 32769;  // must differ from main server (32768)
+    cfg.max_uri_handlers  = 2;
+    cfg.max_open_sockets  = 2;      // only need 1 stream + 1 spare
+    cfg.recv_wait_timeout = 30;
+    cfg.send_wait_timeout = 60;
+
+    ESP_ERROR_CHECK(httpd_start(&s_stream_server, &cfg));
+
+    httpd_uri_t stream = { .uri="/stream", .method=HTTP_GET,
+                           .handler=mjpeg_stream_handler };
+    ESP_ERROR_CHECK(httpd_register_uri_handler(s_stream_server, &stream));
+
+    ESP_LOGI("mjpeg", "Stream server on port 81");
+    return ESP_OK;
+}

@@ -18,6 +18,7 @@ extern "C" {
 #endif
 
 esp_err_t mjpeg_stream_handler(httpd_req_t *req);
+esp_err_t mjpeg_server_start(void);
 
 #ifdef __cplusplus
 }
