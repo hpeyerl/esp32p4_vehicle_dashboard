@@ -117,10 +117,35 @@ pio device monitor -e stub_debug --port /dev/ttyACM0
 
 ## TODO
 1. Connect SN65HVD230 to ZombieVerter CAN bus and test SDO
-2. PRND touchable — CAN gear shift (M5Dial working code exists as reference)
+2. ~~PRND touchable~~ DONE
 3. Arc layout tightening (Tesla-style brackets) — defer to real display
 4. ADC dimmer GPIO20 or GPIO21
 5. MJPEG color fix (byte-swap) — cosmetic only
-6. Background WiFi reconnect indicator on dashboard
+6. ~~CAN + WiFi status indicators~~ DONE
 7. Navigation touch events on real display
-8. Status page populate from g_dash sim data
+8. ~~Status page~~ DONE
+10. Odometer — accumulate VSS distance, persist in NVS, display in center panel between arcs
+    - VSS already provides speed; integrate over time for distance
+    - Write to NVS periodically (e.g. every 0.5 km) to limit flash wear cycles
+    - Display between SOC and power arcs in center panel (where PRND used to be)
+    - Trip odometer (reset on power cycle or button) + total odometer
+    - Consider: NVS namespace "odo", keys "total_km" (float or uint32 in 0.1km units)
+    - vss_sensor.c already has vss_get_mph(); add vss_add_distance() or accumulate in ui_task
+11. MagneRide suspension control (Sport / Comfort / Auto modes)
+    - MagneRide shocks controlled via PWM duty cycle at 25 kHz (LEDC peripheral)
+    - Each shock: 3-5A at 12-14V — requires D4184/AOD4184/LR7843 MOSFET driver board per channel
+    - 2 channels: left + right shock, each needs one ESP32 GPIO PWM output
+    - Flyback diode (1N5408/UF5408) recommended directly at shock connector
+    - Duty cycle maps to stiffness: ~35% = comfort, higher = stiffer/sport
+    - Modes: Comfort, Sport, Auto (auto-stiffens above configurable speed threshold using VSS)
+    - UI: toggle button on home screen; show current mode; Auto mode indicator
+    - GPIO candidates: many free pins available (20/21 already considered for dimmer)
+    - Module: suspension_ctrl.c — ledc_timer_config + ledc_channel_config, mode stored in NVS
+    - Safety: in Auto mode, gradual ramp (not instant step) to avoid harsh transition
+9. EPB / Park button integration — This drivetrain has no Park or Neutral gear (only R and D).
+   Park is a separate EPB controller with a momentary button and LEDs. Options:
+   - Keep R/D only on gear strip (accurate but sparse)
+   - Keep P as a UI shortcut that sends EPB engage/disengage command (different CAN ID/protocol)
+   - Safety constraint: disallow EPB engage if speed > 5 km/h
+   - Need: EPB CAN protocol documentation, CAN ID, engage/disengage byte pattern
+   - Current PRND strip sends 0x312; EPB would need a separate gear_shifter or epb_controller module

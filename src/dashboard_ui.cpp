@@ -219,7 +219,7 @@ static void make_meter(Meter *m, lv_obj_t *parent,
     lv_obj_clear_flag(dot, LV_OBJ_FLAG_SCROLLABLE);
 
     // Tag label
-    lv_obj_t *tl = make_label(parent, tag, CLR_TEXT_DIM, &lv_font_montserrat_10);
+    lv_obj_t *tl = make_label(parent, tag, CLR_CYAN, &lv_font_montserrat_10);
     lv_obj_set_pos(tl, cx - 14, cy + 4);
 
     // Value label
@@ -299,15 +299,15 @@ void dashboard_ui_create(lv_display_t *disp)
     lv_coord_t cy0 = meter_spacing / 2;
 
     make_meter(&s_inv_meter, left, meter_cx, cy0 + 0*meter_spacing,
-               126, 153, "INV");
+               126, 153, "Inverter");
     make_meter(&s_mot_meter, left, meter_cx, cy0 + 1*meter_spacing,
-               126, 153, "MOT");
+               126, 153, "Motor");
     make_meter(&s_bat_meter, left, meter_cx, cy0 + 2*meter_spacing,
-               126, 153, "BATT");
+               126, 153, "HV Battery");
     make_meter(&s_pv_meter,  left, meter_cx, cy0 + 3*meter_spacing,
-               180, 180, "PACK V");
+               180, 180, "Pack V");
     make_meter(&s_pa_meter,  left, meter_cx, cy0 + 4*meter_spacing,
-               90, 90, "PACK A");
+               90, 90, "Pack A");
 
     // Override pack V arc to cyan
     lv_obj_set_style_arc_color(s_pv_meter.arc_green, CLR_CYAN, LV_PART_MAIN);
@@ -354,7 +354,7 @@ void dashboard_ui_create(lv_display_t *disp)
     lv_arc_set_bg_angles(s_bar_soc, ARC_START, ARC_END);
     lv_arc_set_angles(s_bar_soc, ARC_START, ARC_START);  // starts empty
     lv_obj_set_style_arc_color(s_bar_soc, CLR_BORDER, LV_PART_MAIN);  // bg transparent
-    lv_obj_set_style_arc_color(s_bar_soc, CLR_CYAN, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(s_bar_soc, CLR_GREEN, LV_PART_INDICATOR);
     lv_obj_set_style_arc_width(s_bar_soc, ARC_W, LV_PART_MAIN);
     lv_obj_set_style_arc_width(s_bar_soc, ARC_W, LV_PART_INDICATOR);
     lv_obj_set_style_bg_opa(s_bar_soc, LV_OPA_TRANSP, 0);
@@ -362,11 +362,20 @@ void dashboard_ui_create(lv_display_t *disp)
     lv_obj_clear_flag(s_bar_soc, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_clear_flag(s_bar_soc, LV_OBJ_FLAG_SCROLLABLE);
 
-    // SOC labels — positioned near the arc endpoints
-    s_lbl_soc_pct = make_label(scr, "0%", CLR_CYAN, &lv_font_montserrat_14);
-    lv_obj_set_pos(s_lbl_soc_pct, LEFT_W + 8, MAIN_H / 2 + ARC_R * 7/10);
-    s_lbl_range = make_label(scr, "--", CLR_TEXT_BRIGHT, &lv_font_montserrat_10);
-    lv_obj_set_pos(s_lbl_range, LEFT_W + 8, MAIN_H / 2 - ARC_R * 7/10 - 16);
+    // SOC % label — centered inside the bottom of the arc stroke
+    // RANGE label — to the left of the arc at the same height
+    {
+        float a = ARC_START * (float)M_PI / 180.0f;
+        lv_coord_t bx = soc_cx + (lv_coord_t)(ARC_R * cosf(a));
+        lv_coord_t by = soc_cy + (lv_coord_t)(ARC_R * sinf(a));
+        s_lbl_soc_pct = make_label(scr, "0%", CLR_CYAN, &lv_font_montserrat_18);
+        lv_obj_set_pos(s_lbl_soc_pct, bx - 25, by - 110);
+
+        lv_obj_t *rng_hdr = make_label(scr, "RANGE", CLR_CYAN, &lv_font_montserrat_10);
+        lv_obj_set_pos(rng_hdr, soc_cx - ARC_R, by - 130);
+        s_lbl_range = make_label(scr, "--", CLR_WHITE, &lv_font_montserrat_18);
+        lv_obj_set_pos(s_lbl_range, soc_cx - ARC_R, by - 112);
+    }
 
     // ── Center ────────────────────────────────────────────────────────────
     const lv_coord_t CTR_X  = LEFT_W + 30;
@@ -380,10 +389,6 @@ void dashboard_ui_create(lv_display_t *disp)
     lv_obj_clear_flag(ctr, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(ctr, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
 
-    lv_obj_t *spd_lbl = make_label(ctr, "SPEED", CLR_TEXT_DIM,
-                                    &lv_font_montserrat_14);
-    lv_obj_align(spd_lbl, LV_ALIGN_TOP_MID, 0, 18);
-
     s_lbl_speed = make_label(ctr, "0", CLR_WHITE, &lv_font_montserrat_110);
     lv_obj_align(s_lbl_speed, LV_ALIGN_CENTER, 0, -40);
 
@@ -391,25 +396,7 @@ void dashboard_ui_create(lv_display_t *disp)
                                  &lv_font_montserrat_18);
     lv_obj_align(unit, LV_ALIGN_CENTER, 0, 8);
 
-    lv_obj_t *gdiv = lv_obj_create(ctr);
-    lv_obj_set_size(gdiv, CTR_W - 40, 1);
-    lv_obj_set_style_bg_color(gdiv, CLR_BORDER, 0);
-    lv_obj_set_style_bg_opa(gdiv, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(gdiv, 0, 0);
-    lv_obj_align(gdiv, LV_ALIGN_CENTER, 0, 60);
-
-    const char *gnames[] = {"P","R","N","D"};
-    for (int i = 0; i < 4; i++) {
-        s_lbl_prnd[i] = make_label(ctr, gnames[i], CLR_TEXT_DIM,
-                                    &lv_font_montserrat_24);
-        lv_obj_align(s_lbl_prnd[i], LV_ALIGN_BOTTOM_MID,
-                     -72 + i * 48, -36);
-        lv_obj_add_flag(s_lbl_prnd[i], LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_ext_click_area(s_lbl_prnd[i], 20);
-        lv_obj_add_event_cb(s_lbl_prnd[i], prv_gear_tap_cb,
-                            LV_EVENT_CLICKED, (void *)(intptr_t)i);
-    }
-    lv_obj_set_style_text_color(s_lbl_prnd[0], CLR_CYAN, 0);
+    // PRND labels moved to right panel — see below
 
     // Cruise indicator — sits above PRND row, hidden until active
     s_lbl_cruise_st = make_label(ctr, "", CLR_TEXT_DIM,
@@ -458,14 +445,17 @@ void dashboard_ui_create(lv_display_t *disp)
     lv_obj_clear_flag(s_bar_pwr, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_clear_flag(s_bar_pwr, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Power labels
-    s_lbl_pwr_val = make_label(scr, "+0", CLR_ORANGE, &lv_font_montserrat_14);
-    lv_obj_set_pos(s_lbl_pwr_val,
-                   W - RIGHT_W - 50, MAIN_H / 2 + ARC_R * 7/10);
-    lv_obj_t *kw_hdr = make_label(scr, "kW", CLR_TEXT_DIM,
-                                   &lv_font_montserrat_10);
-    lv_obj_set_pos(kw_hdr, W - RIGHT_W - 44,
-                   MAIN_H / 2 - ARC_R * 7/10 - 16);
+    // Power labels — at the bottom endpoint of the arc (PWR_ARC_END angle)
+    {
+        float a = PWR_ARC_END * (float)M_PI / 180.0f;
+        lv_coord_t bx = pwr_cx + (lv_coord_t)(ARC_R * cosf(a));
+        lv_coord_t by = pwr_cy + (lv_coord_t)(ARC_R * sinf(a));
+        s_lbl_pwr_val = make_label(scr, "+0", CLR_CYAN, &lv_font_montserrat_18);
+        lv_obj_set_pos(s_lbl_pwr_val, bx - 25, by - 110);
+        lv_obj_t *kw_hdr = make_label(scr, "kW", CLR_TEXT_DIM,
+                                       &lv_font_montserrat_10);
+        lv_obj_set_pos(kw_hdr, bx - 5, by - 130);
+    }
 
     // ── Right panel ───────────────────────────────────────────────────────
     lv_obj_t *right = lv_obj_create(scr);
@@ -488,10 +478,10 @@ void dashboard_ui_create(lv_display_t *disp)
     // Actually range is shown below SOC bar — add separate range label here too
     static lv_obj_t *s_lbl_range2 = NULL;  // second instance for right panel
 
-    lv_obj_t *r_eff_tag = make_label(right, "EFFICIENCY", CLR_TEXT_DIM,
+    lv_obj_t *r_eff_tag = make_label(right, "EFFICIENCY", CLR_CYAN,
                                       &lv_font_montserrat_10);
     lv_obj_align(r_eff_tag, LV_ALIGN_TOP_LEFT, 0, 0);
-    lv_obj_t *r_eff_unit = make_label(right, UNITS_EFF_LABEL, CLR_TEXT_DIM,
+    lv_obj_t *r_eff_unit = make_label(right, UNITS_EFF_LABEL, CLR_CYAN,
                                        &lv_font_montserrat_10);
     lv_obj_align(r_eff_unit, LV_ALIGN_TOP_LEFT, 0, 14);
     s_lbl_eff = make_label(right, "--", CLR_TEXT_BRIGHT,
@@ -505,7 +495,7 @@ void dashboard_ui_create(lv_display_t *disp)
     lv_obj_set_style_border_width(d1, 0, 0);
     lv_obj_align(d1, LV_ALIGN_TOP_LEFT, 0, 100);
 
-    make_label(right, "TRIP kWh", CLR_TEXT_DIM, &lv_font_montserrat_10);
+    make_label(right, "TRIP kWh", CLR_CYAN, &lv_font_montserrat_10);
     lv_obj_t *trip_tag = lv_obj_get_child(right, lv_obj_get_child_cnt(right)-1);
     lv_obj_align(trip_tag, LV_ALIGN_TOP_LEFT, 0, 112);
     s_lbl_trip = make_label(right, "--", CLR_TEXT_BRIGHT,
@@ -519,7 +509,7 @@ void dashboard_ui_create(lv_display_t *disp)
     lv_obj_set_style_border_width(d2, 0, 0);
     lv_obj_align(d2, LV_ALIGN_TOP_LEFT, 0, 200);
 
-    make_label(right, "12V AUX", CLR_TEXT_DIM, &lv_font_montserrat_10);
+    make_label(right, "12V AUX", CLR_CYAN, &lv_font_montserrat_10);
     lv_obj_t *aux_tag = lv_obj_get_child(right, lv_obj_get_child_cnt(right)-1);
     lv_obj_align(aux_tag, LV_ALIGN_TOP_LEFT, 0, 212);
     s_lbl_aux_v = make_label(right, "0.0 V", CLR_TEXT_BRIGHT,
@@ -531,29 +521,33 @@ void dashboard_ui_create(lv_display_t *disp)
         lv_coord_t panel_cx = W - RIGHT_W / 2;  // horizontal center of right panel
         lv_coord_t row_y    = MAIN_H - 42;      // near bottom of main area
 
-        // CAN indicator
+        // CAN indicator — loop symbol, colored red/green
         lv_coord_t can_cx = panel_cx - 28;
-        s_dot_can = lv_obj_create(scr);
-        lv_obj_set_size(s_dot_can, 14, 14);
-        lv_obj_set_style_radius(s_dot_can, LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_bg_color(s_dot_can, CLR_RED, 0);
-        lv_obj_set_style_bg_opa(s_dot_can, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_width(s_dot_can, 0, 0);
-        lv_obj_set_pos(s_dot_can, can_cx - 7, row_y);
-        lv_obj_t *can_lbl = make_label(scr, "CAN", CLR_TEXT_DIM, &lv_font_montserrat_10);
-        lv_obj_set_pos(can_lbl, can_cx - 9, row_y + 17);
+        s_dot_can = make_label(scr, LV_SYMBOL_LOOP, CLR_RED, &lv_font_montserrat_14);
+        lv_obj_set_pos(s_dot_can, can_cx - 10, row_y);
 
-        // WiFi indicator
+        // WiFi indicator — symbol glyph, colored red/green
         lv_coord_t wifi_cx = panel_cx + 28;
-        s_dot_wifi = lv_obj_create(scr);
-        lv_obj_set_size(s_dot_wifi, 14, 14);
-        lv_obj_set_style_radius(s_dot_wifi, LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_bg_color(s_dot_wifi, CLR_RED, 0);
-        lv_obj_set_style_bg_opa(s_dot_wifi, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_width(s_dot_wifi, 0, 0);
-        lv_obj_set_pos(s_dot_wifi, wifi_cx - 7, row_y);
-        lv_obj_t *wifi_lbl = make_label(scr, "WiFi", CLR_TEXT_DIM, &lv_font_montserrat_10);
-        lv_obj_set_pos(wifi_lbl, wifi_cx - 10, row_y + 17);
+        s_dot_wifi = make_label(scr, LV_SYMBOL_WIFI, CLR_RED, &lv_font_montserrat_14);
+        lv_obj_set_pos(s_dot_wifi, wifi_cx - 10, row_y);
+    }
+
+    // ── PRND in right panel (above status indicators) ────────────────────
+    {
+        lv_coord_t panel_cx  = W - RIGHT_W / 2;
+        lv_coord_t prnd_y    = MAIN_H - 110;   // above indicators at MAIN_H-42
+        const char *gnames[] = {"P","R","N","D"};
+        int x_off[]          = {-60, -20, 20, 60};
+        for (int i = 0; i < 4; i++) {
+            s_lbl_prnd[i] = make_label(scr, gnames[i], CLR_TEXT_DIM,
+                                        &lv_font_montserrat_40);
+            lv_obj_set_pos(s_lbl_prnd[i], panel_cx + x_off[i] - 14, prnd_y);
+            lv_obj_add_flag(s_lbl_prnd[i], LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_ext_click_area(s_lbl_prnd[i], 20);
+            lv_obj_add_event_cb(s_lbl_prnd[i], prv_gear_tap_cb,
+                                LV_EVENT_CLICKED, (void *)(intptr_t)i);
+        }
+        lv_obj_set_style_text_color(s_lbl_prnd[0], CLR_CYAN, 0);
     }
 
     // ── Bottom nav bar ────────────────────────────────────────────────────
@@ -673,7 +667,7 @@ void dashboard_ui_update(const DashData *d)
     // Fill from start(120°) upward: 0%=empty, 100%=full 120° sweep.
     static lv_color_t last_soc_col = {0};
     float soc_f = d->soc_pct / 100.0f;
-    lv_color_t soc_col = soc_f >= 0.50f ? CLR_CYAN :
+    lv_color_t soc_col = soc_f >= 0.50f ? CLR_GREEN :
                          soc_f >= 0.21f ? CLR_AMBER : CLR_RED;
     int16_t soc_end_angle = (int16_t)(ARC_START + soc_f * (ARC_END - ARC_START));
     lv_arc_set_angles(s_bar_soc, ARC_START, soc_end_angle);
@@ -754,11 +748,11 @@ void dashboard_ui_update(const DashData *d)
         static bool last_can_ok  = false;
         static bool last_wifi_ok = false;
         if (can_ok != last_can_ok) {
-            lv_obj_set_style_bg_color(s_dot_can, can_ok ? CLR_GREEN : CLR_RED, 0);
+            lv_obj_set_style_text_color(s_dot_can, can_ok ? CLR_GREEN : CLR_RED, 0);
             last_can_ok = can_ok;
         }
         if (wifi_ok != last_wifi_ok) {
-            lv_obj_set_style_bg_color(s_dot_wifi, wifi_ok ? CLR_GREEN : CLR_RED, 0);
+            lv_obj_set_style_text_color(s_dot_wifi, wifi_ok ? CLR_GREEN : CLR_RED, 0);
             last_wifi_ok = wifi_ok;
         }
     }
