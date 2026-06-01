@@ -84,8 +84,8 @@ static lv_obj_t *s_lbl_trip    = NULL;
 static lv_obj_t *s_lbl_aux_v   = NULL;
 static lv_obj_t *s_dot_can     = NULL;
 static lv_obj_t *s_dot_wifi    = NULL;
-static lv_obj_t *s_lbl_odo     = NULL;
-static lv_obj_t *s_lbl_trip_odo = NULL;
+static lv_obj_t *s_lbl_odo_val      = NULL;
+static lv_obj_t *s_lbl_trip_odo_val = NULL;
 
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -306,14 +306,40 @@ void dashboard_ui_create(lv_display_t *disp)
                126, 153, "Motor");
     make_meter(&s_bat_meter, left, meter_cx, cy0 + 2*meter_spacing,
                126, 153, "HV Battery");
+    // Pack V: range 290-450V = 160V = 180°
+    // Zones: 290-299 (10°)=red, 300-340 (45°)=orange, 341-430 (100°)=green, 430-450 (22°)=red
+    // green_end=10°, yellow_end=55° passed to make_meter; arc_red resized + extra arc added
     make_meter(&s_pv_meter,  left, meter_cx, cy0 + 3*meter_spacing,
-               180, 180, "Pack V");
+               10, 55, "Pack V");
+    lv_obj_set_style_arc_color(s_pv_meter.arc_green,  CLR_RED,    LV_PART_MAIN);
+    lv_obj_set_style_arc_color(s_pv_meter.arc_green,  CLR_RED,    LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(s_pv_meter.arc_yellow, CLR_ORANGE, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(s_pv_meter.arc_yellow, CLR_ORANGE, LV_PART_INDICATOR);
+    // arc_red was 235-360°; resize to 235-338° (green zone) and recolor
+    lv_arc_set_bg_angles(s_pv_meter.arc_red, 235, 338);
+    lv_arc_set_angles(s_pv_meter.arc_red,    235, 338);
+    lv_obj_set_style_arc_color(s_pv_meter.arc_red, CLR_GREEN, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(s_pv_meter.arc_red, CLR_GREEN, LV_PART_INDICATOR);
+    // Extra arc for 430+V (red) — 338-358°
+    {
+        lv_coord_t pv_cy = cy0 + 3 * meter_spacing;
+        lv_coord_t sz    = METER_R * 2;
+        lv_obj_t  *ar2   = lv_arc_create(left);
+        lv_obj_set_pos(ar2, meter_cx - METER_R, pv_cy - METER_R);
+        lv_obj_set_size(ar2, sz, sz);
+        lv_arc_set_bg_angles(ar2, 338, 358);
+        lv_arc_set_angles(ar2,    338, 358);
+        lv_obj_set_style_arc_color(ar2, CLR_RED, LV_PART_MAIN);
+        lv_obj_set_style_arc_color(ar2, CLR_RED, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_width(ar2, METER_W, LV_PART_MAIN);
+        lv_obj_set_style_arc_width(ar2, METER_W, LV_PART_INDICATOR);
+        lv_obj_set_style_bg_opa(ar2, LV_OPA_TRANSP, 0);
+        lv_obj_remove_style(ar2, NULL, LV_PART_KNOB);
+        lv_obj_clear_flag(ar2, LV_OBJ_FLAG_CLICKABLE);
+    }
+
     make_meter(&s_pa_meter,  left, meter_cx, cy0 + 4*meter_spacing,
                90, 90, "Pack A");
-
-    // Override pack V arc to cyan
-    lv_obj_set_style_arc_color(s_pv_meter.arc_green, CLR_CYAN, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(s_pv_meter.arc_green, CLR_CYAN, LV_PART_INDICATOR);
 
     // Pack A: green left half, orange right half (regen / drive)
     lv_obj_set_style_arc_color(s_pa_meter.arc_green, CLR_GREEN, LV_PART_MAIN);
@@ -372,11 +398,6 @@ void dashboard_ui_create(lv_display_t *disp)
         lv_coord_t by = soc_cy + (lv_coord_t)(ARC_R * sinf(a));
         s_lbl_soc_pct = make_label(scr, "0%", CLR_CYAN, &lv_font_montserrat_18);
         lv_obj_set_pos(s_lbl_soc_pct, bx - 25, by - 110);
-
-        lv_obj_t *rng_hdr = make_label(scr, "RANGE", CLR_CYAN, &lv_font_montserrat_10);
-        lv_obj_set_pos(rng_hdr, soc_cx - ARC_R, by - 130);
-        s_lbl_range = make_label(scr, "--", CLR_WHITE, &lv_font_montserrat_18);
-        lv_obj_set_pos(s_lbl_range, soc_cx - ARC_R, by - 112);
     }
 
     // ── Center ────────────────────────────────────────────────────────────
@@ -401,13 +422,26 @@ void dashboard_ui_create(lv_display_t *disp)
     // PRND labels moved to right panel — see below
 
     // ── Odometer / Trip ───────────────────────────────────────────────────
-    s_lbl_odo = make_label(ctr, "ODO  0.0 " UNITS_DIST_LABEL,
-                            CLR_TEXT_BRIGHT, &lv_font_montserrat_18);
-    lv_obj_align(s_lbl_odo, LV_ALIGN_CENTER, 0, 70);
+    {
+        lv_obj_t *h = make_label(ctr, "ODO", CLR_CYAN, &lv_font_montserrat_18);
+        lv_obj_align(h, LV_ALIGN_CENTER, -60, 70);
+    }
+    s_lbl_odo_val = make_label(ctr, "0.0 " UNITS_DIST_LABEL, CLR_WHITE, &lv_font_montserrat_18);
+    lv_obj_align(s_lbl_odo_val, LV_ALIGN_CENTER, 30, 70);
 
-    s_lbl_trip_odo = make_label(ctr, "TRIP  0.0 " UNITS_DIST_LABEL,
-                                 CLR_TEXT_BRIGHT, &lv_font_montserrat_18);
-    lv_obj_align(s_lbl_trip_odo, LV_ALIGN_CENTER, 0, 98);
+    {
+        lv_obj_t *h = make_label(ctr, "TRIP", CLR_CYAN, &lv_font_montserrat_18);
+        lv_obj_align(h, LV_ALIGN_CENTER, -60, 98);
+    }
+    s_lbl_trip_odo_val = make_label(ctr, "0.0 " UNITS_DIST_LABEL, CLR_WHITE, &lv_font_montserrat_18);
+    lv_obj_align(s_lbl_trip_odo_val, LV_ALIGN_CENTER, 30, 98);
+
+    {
+        lv_obj_t *h = make_label(ctr, "RANGE", CLR_CYAN, &lv_font_montserrat_18);
+        lv_obj_align(h, LV_ALIGN_CENTER, -60, 126);
+    }
+    s_lbl_range = make_label(ctr, "-- " UNITS_DIST_LABEL, CLR_WHITE, &lv_font_montserrat_18);
+    lv_obj_align(s_lbl_range, LV_ALIGN_CENTER, 30, 126);
 
     // Cruise indicator — sits above PRND row, hidden until active
     s_lbl_cruise_st = make_label(ctr, "", CLR_TEXT_DIM,
@@ -649,13 +683,15 @@ void dashboard_ui_update(const DashData *d)
 
     // Pack voltage meter: scale 300-420V
     {
-        float pct = (d->pack_volts - 300.0f) / 120.0f;
+        float pct = (d->pack_volts - 290.0f) / 160.0f;
         update_needle(&s_pv_meter, pct);
         snprintf(buf, sizeof(buf), "%.0f V", d->pack_volts);
         lv_label_set_text(s_pv_meter.lbl_val, buf);
-        lv_color_t nc = CLR_CYAN;
+        lv_color_t nc = d->pack_volts < 300.0f ? CLR_RED   :
+                        d->pack_volts < 341.0f ? CLR_ORANGE :
+                        d->pack_volts <= 430.0f ? CLR_GREEN : CLR_RED;
         if (memcmp(&nc, &lc_pv, sizeof(lv_color_t)) != 0) {
-            lv_obj_set_style_text_color(s_pv_meter.lbl_val, CLR_CYAN, 0);
+            lv_obj_set_style_text_color(s_pv_meter.lbl_val, nc, 0);
             lc_pv = nc;
         }
     }
@@ -749,12 +785,12 @@ void dashboard_ui_update(const DashData *d)
     lv_label_set_text(s_lbl_trip, "--");  // TODO: trip kWh accumulator
 
     // ── Odometer ──────────────────────────────────────────────────────────
-    snprintf(buf, sizeof(buf), "ODO  %.1f %s",
+    snprintf(buf, sizeof(buf), "%.1f %s",
              DIST_TO_DISPLAY(d->odo_total_miles), UNITS_DIST_LABEL);
-    lv_label_set_text(s_lbl_odo, buf);
-    snprintf(buf, sizeof(buf), "TRIP  %.1f %s",
+    lv_label_set_text(s_lbl_odo_val, buf);
+    snprintf(buf, sizeof(buf), "%.1f %s",
              DIST_TO_DISPLAY(d->trip_miles), UNITS_DIST_LABEL);
-    lv_label_set_text(s_lbl_trip_odo, buf);
+    lv_label_set_text(s_lbl_trip_odo_val, buf);
 
     snprintf(buf, sizeof(buf), "%.1f V", d->aux_volts);
     lv_label_set_text(s_lbl_aux_v, buf);
