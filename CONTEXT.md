@@ -22,6 +22,9 @@ Last updated: 2026-05-30
 | SDIO D1 | 15 | |
 | SDIO D2/Handshake | 16 | |
 | SDIO D3/DataReady | 17 | |
+| EPB output (button) | 6 | Active-low pulse ~200ms, normally HIGH |
+| EPB green LED input | 9 | Active-low + pullup, brake released |
+| EPB red LED input | 10 | Active-low + pullup, brake applied |
 
 ## Current Working State
 - WiFi connects via SDIO ESP-Hosted ✓
@@ -143,9 +146,25 @@ pio device monitor -e stub_debug --port /dev/ttyACM0
     - Module: suspension_ctrl.c — ledc_timer_config + ledc_channel_config, mode stored in NVS
     - Safety: in Auto mode, gradual ramp (not instant step) to avoid harsh transition
 9. EPB / Park button integration — This drivetrain has no Park or Neutral gear (only R and D).
-   Park is a separate EPB controller with a momentary button and LEDs. Options:
-   - Keep R/D only on gear strip (accurate but sparse)
-   - Keep P as a UI shortcut that sends EPB engage/disengage command (different CAN ID/protocol)
-   - Safety constraint: disallow EPB engage if speed > 5 km/h
-   - Need: EPB CAN protocol documentation, CAN ID, engage/disengage byte pattern
-   - Current PRND strip sends 0x312; EPB would need a separate gear_shifter or epb_controller module
+   Park is a separate EPB controller with a momentary button and status LEDs (not CAN — direct GPIO).
+   Hardware interface (P4-Nano GPIOs — exact pins TBD, defaults below):
+   - EPB_GREEN_PIN (default GPIO 9):  input + pullup, active-low -> brake RELEASED
+   - EPB_RED_PIN   (default GPIO 10): input + pullup, active-low -> brake APPLIED
+   - EPB_OUT_PIN   (default GPIO 6):  output, normally HIGH; pulse LOW ~200ms to press button
+   - Both green+red active simultaneously = SERVICE MODE (10s hold hazard — never hold output low >9s)
+   Module: epb_controller.c — GPIO init, state read, one-shot 200ms pulse timer
+   UI: small colored dot near PRND row (green=released, red=applied, amber=service)
+   "P" on M5Dial gear strip auto-engages EPB; D/R auto-releases.
+   Safety rules (BOTH conditions required to allow engage):
+   - speed < 5 km/h (guards against accidental high-speed lockup)
+   - gear != D  (belt-and-suspenders — CAN fault could zero speed reading)
+   Reboot safety: EPB_OUT_PIN configured OUTPUT HIGH as first act of epb_init(), before any gear
+   logic runs. GPIO defaults to high-impedance on reset so there is no unsafe window at boot.
+   Physical button remains mounted as emergency stop (software path intentionally conservative).
+12. OpenVehicles / OVMS integration for remote telemetry
+   - https://www.openvehicles.com/ — open-source vehicle monitoring platform with built-in LTE modem
+   - Consider replacing or supplementing WiFi OTA/status with OVMS for remote telemetry, GPS tracking,
+     remote commands, and cloud dashboard
+   - OVMS speaks its own protocol over MQTT or direct TCP; may need a bridge or custom OVMS module
+   - Evaluate: does OVMS CAN sniffing overlap with our existing CAN parser? Could share the bus.
+   - Low priority; investigate when LTE connectivity becomes a requirement
