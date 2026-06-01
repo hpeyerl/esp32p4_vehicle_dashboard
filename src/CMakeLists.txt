@@ -20,6 +20,7 @@ idf_component_register(
         "settings_page.c"
         "status_page.c"
         "gear_shifter.c"
+        "epb_controller.c"
     INCLUDE_DIRS "."
     REQUIRES
         esp_hosted
