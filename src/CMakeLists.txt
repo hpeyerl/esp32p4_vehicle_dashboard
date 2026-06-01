@@ -19,6 +19,7 @@ idf_component_register(
         "sdo_manager.c"
         "settings_page.c"
         "status_page.c"
+        "gear_shifter.c"
     INCLUDE_DIRS "."
     REQUIRES
         esp_hosted

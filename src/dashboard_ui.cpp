@@ -23,6 +23,7 @@
 #include "can_signals.h"
 #include "units.h"
 #include "wifi_manager.h"
+#include "gear_shifter.h"
 #include "lvgl.h"
 #include "esp_timer.h"
 #include <stdio.h>
@@ -257,6 +258,13 @@ static lv_display_t *s_disp        = NULL;
 static volatile dash_screen_t s_pending_screen    = DASH_SCREEN_HOME;
 static volatile bool          s_screen_change_req = false;
 
+// ── PRND tap callback ─────────────────────────────────────────────────────
+static void prv_gear_tap_cb(lv_event_t *e)
+{
+    int8_t gear = (int8_t)(intptr_t)lv_event_get_user_data(e);
+    gear_shifter_request(gear);
+}
+
 // ── dashboard_ui_create ───────────────────────────────────────────────────
 void dashboard_ui_create(lv_display_t *disp)
 {
@@ -396,6 +404,10 @@ void dashboard_ui_create(lv_display_t *disp)
                                     &lv_font_montserrat_24);
         lv_obj_align(s_lbl_prnd[i], LV_ALIGN_BOTTOM_MID,
                      -72 + i * 48, -36);
+        lv_obj_add_flag(s_lbl_prnd[i], LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_ext_click_area(s_lbl_prnd[i], 20);
+        lv_obj_add_event_cb(s_lbl_prnd[i], prv_gear_tap_cb,
+                            LV_EVENT_CLICKED, (void *)(intptr_t)i);
     }
     lv_obj_set_style_text_color(s_lbl_prnd[0], CLR_CYAN, 0);
 

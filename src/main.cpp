@@ -27,6 +27,7 @@
 #include "ota_server.h"
 #include "vss_sensor.h"
 #include "sdo_manager.h"
+#include "gear_shifter.h"
 #include "units.h"
 
 #ifndef STRINGIFY
@@ -109,6 +110,12 @@ static void ui_task(void *arg)
         memcpy(&snap, &g_dash, sizeof(DashData));
         xSemaphoreGive(g_dash_mutex);
 
+        // Local gear request overrides CAN-received gear for immediate UI feedback
+        {
+            int8_t req = gear_shifter_current();
+            if (req >= 0) snap.gear = req;
+        }
+
         // VSS speed — overrides CAN speed when sensor is active
         #if !SIM_DATA
         {
@@ -187,6 +194,7 @@ extern "C" void app_main(void)
 
     xTaskCreatePinnedToCore(can_rx_task, "can_rx", 4096,  NULL, 10, NULL, 0);
     xTaskCreatePinnedToCore(ui_task,     "ui",     12288, NULL,  5, NULL, 1);
+    gear_shifter_start();
 
     // Start WiFi/OTA/SDO in background — display and CAN are already running
     xTaskCreate(prv_bg_init_task, "bg_init", 8192, NULL, 3, NULL);
