@@ -116,7 +116,7 @@ static void ui_task(void *arg)
             if (req >= 0) snap.gear = req;
         }
 
-        // VSS speed — overrides CAN speed when sensor is active
+        // VSS speed + odometer — overrides CAN speed when sensor is active
         #if !SIM_DATA
         {
             float vss_mph = vss_get_mph();
@@ -127,6 +127,8 @@ static void ui_task(void *arg)
             }
         }
         #endif
+        snap.odo_total_miles = vss_get_total_miles();
+        snap.trip_miles      = vss_get_trip_miles();
 #if SIM_DATA
         {
             static float t = 0.0f;

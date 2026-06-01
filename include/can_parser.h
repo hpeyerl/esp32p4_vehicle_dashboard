@@ -31,6 +31,8 @@ typedef struct {
 
     // Derived
     float   range_dist;     // estimated range, native miles (convert at display)
+    float   odo_total_miles;
+    float   trip_miles;
 
     // Gear:  0=P  1=R  2=N  3=D
     uint8_t gear;          // requested gear from shifter (0x312)

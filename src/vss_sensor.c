@@ -25,6 +25,9 @@ static const char *NVS_KEY_TIRE  = "tire_circ";
 static const char *NVS_KEY_DIFF  = "diff_ratio";
 static const char *NVS_KEY_PPR   = "pulses_rev";
 
+static const char *NVS_ODO_NS    = "odo";
+static const char *NVS_KEY_TOTAL = "total_10th";  // uint32, units of 0.1 mile
+
 // ── Calibration (runtime, NVS-backed) ────────────────────────────────────────
 typedef struct {
     float tire_circ_inches;
@@ -45,6 +48,15 @@ static void prv_cal_derive(vss_cal_t *c)
     c->usec_per_pulse_at_1mph = 3600000000.0f / c->pulses_per_mile;
 }
 
+// ── Odometer ──────────────────────────────────────────────────────────────────
+#define ODO_NVS_WRITE_INTERVAL_MILES  0.5f
+
+static volatile uint32_t s_total_pulses    = 0;  // incremented in ISR
+static uint32_t          s_last_odo_pulses = 0;
+static float             s_total_miles     = 0.0f;
+static float             s_trip_miles      = 0.0f;
+static float             s_odo_nvs_saved   = 0.0f;
+
 // ── ISR timestamp ring buffer ─────────────────────────────────────────────────
 #define TS_BUF_SIZE  16u
 #define TS_BUF_MASK  (TS_BUF_SIZE - 1u)
@@ -59,6 +71,7 @@ static QueueHandle_t s_speed_q = NULL;
 // ── ISR ───────────────────────────────────────────────────────────────────────
 static void IRAM_ATTR prv_vss_isr(void *arg)
 {
+    s_total_pulses++;
     uint64_t t    = (uint64_t)esp_timer_get_time();
     uint32_t next = (s_ts_write + 1) & TS_BUF_MASK;
     if (next != s_ts_read) {          // drop if full
@@ -144,6 +157,43 @@ static void prv_drain_buffer(void)
     }
 }
 
+// ── Odometer NVS + accumulation ───────────────────────────────────────────────
+static void prv_odo_nvs_load(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_ODO_NS, NVS_READONLY, &h) != ESP_OK) return;
+    uint32_t raw = 0;
+    if (nvs_get_u32(h, NVS_KEY_TOTAL, &raw) == ESP_OK)
+        s_total_miles = (float)raw / 10.0f;
+    nvs_close(h);
+    s_odo_nvs_saved = s_total_miles;
+    ESP_LOGI(TAG, "ODO: loaded %.1f miles", s_total_miles);
+}
+
+static void prv_odo_nvs_save(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_ODO_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_u32(h, NVS_KEY_TOTAL, (uint32_t)(s_total_miles * 10.0f));
+    nvs_commit(h);
+    nvs_close(h);
+    s_odo_nvs_saved = s_total_miles;
+}
+
+static void prv_odo_update(void)
+{
+    uint32_t pulses = s_total_pulses;   // atomic 32-bit read
+    if (pulses == s_last_odo_pulses || s_cal.pulses_per_mile <= 0.0f) return;
+
+    float delta = (float)(pulses - s_last_odo_pulses) / s_cal.pulses_per_mile;
+    s_last_odo_pulses = pulses;
+    s_total_miles += delta;
+    s_trip_miles  += delta;
+
+    if ((s_total_miles - s_odo_nvs_saved) >= ODO_NVS_WRITE_INTERVAL_MILES)
+        prv_odo_nvs_save();
+}
+
 // ── FreeRTOS task ─────────────────────────────────────────────────────────────
 static void prv_vss_task(void *arg)
 {
@@ -151,6 +201,7 @@ static void prv_vss_task(void *arg)
 
     for (;;) {
         prv_drain_buffer();
+        prv_odo_update();
 
         if (s_last_ts > 0) {
             uint64_t now_us = (uint64_t)esp_timer_get_time();
@@ -222,6 +273,7 @@ esp_err_t vss_sensor_init(void)
     s_cal.pulses_per_rev   = VSS_DEFAULT_PULSES_PER_REV;
     prv_nvs_load();
     prv_cal_derive(&s_cal);
+    prv_odo_nvs_load();
 
     ESP_LOGI(TAG, "pulses/mile=%.1f  us/pulse@1mph=%.1f",
              s_cal.pulses_per_mile, s_cal.usec_per_pulse_at_1mph);
@@ -284,5 +336,9 @@ esp_err_t vss_set_cal(float tire_circ_inches, float diff_ratio, int pulses_per_r
     return prv_nvs_save();
 }
 
-float vss_get_pulses_per_mile(void)      { return s_cal.pulses_per_mile; }
+float vss_get_pulses_per_mile(void)        { return s_cal.pulses_per_mile; }
 float vss_get_usec_per_pulse_at_1mph(void) { return s_cal.usec_per_pulse_at_1mph; }
+
+float vss_get_total_miles(void) { return s_total_miles; }
+float vss_get_trip_miles(void)  { return s_trip_miles;  }
+void  vss_reset_trip(void)      { s_trip_miles = 0.0f;  }

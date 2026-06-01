@@ -84,6 +84,8 @@ static lv_obj_t *s_lbl_trip    = NULL;
 static lv_obj_t *s_lbl_aux_v   = NULL;
 static lv_obj_t *s_dot_can     = NULL;
 static lv_obj_t *s_dot_wifi    = NULL;
+static lv_obj_t *s_lbl_odo     = NULL;
+static lv_obj_t *s_lbl_trip_odo = NULL;
 
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -397,6 +399,15 @@ void dashboard_ui_create(lv_display_t *disp)
     lv_obj_align(unit, LV_ALIGN_CENTER, 0, 8);
 
     // PRND labels moved to right panel — see below
+
+    // ── Odometer / Trip ───────────────────────────────────────────────────
+    s_lbl_odo = make_label(ctr, "ODO  0.0 " UNITS_DIST_LABEL,
+                            CLR_TEXT_BRIGHT, &lv_font_montserrat_18);
+    lv_obj_align(s_lbl_odo, LV_ALIGN_CENTER, 0, 70);
+
+    s_lbl_trip_odo = make_label(ctr, "TRIP  0.0 " UNITS_DIST_LABEL,
+                                 CLR_TEXT_BRIGHT, &lv_font_montserrat_18);
+    lv_obj_align(s_lbl_trip_odo, LV_ALIGN_CENTER, 0, 98);
 
     // Cruise indicator — sits above PRND row, hidden until active
     s_lbl_cruise_st = make_label(ctr, "", CLR_TEXT_DIM,
@@ -735,7 +746,15 @@ void dashboard_ui_update(const DashData *d)
         snprintf(buf, sizeof(buf), "--");
     lv_label_set_text(s_lbl_eff, buf);
 
-    lv_label_set_text(s_lbl_trip, "--");  // TODO: trip accumulator
+    lv_label_set_text(s_lbl_trip, "--");  // TODO: trip kWh accumulator
+
+    // ── Odometer ──────────────────────────────────────────────────────────
+    snprintf(buf, sizeof(buf), "ODO  %.1f %s",
+             DIST_TO_DISPLAY(d->odo_total_miles), UNITS_DIST_LABEL);
+    lv_label_set_text(s_lbl_odo, buf);
+    snprintf(buf, sizeof(buf), "TRIP  %.1f %s",
+             DIST_TO_DISPLAY(d->trip_miles), UNITS_DIST_LABEL);
+    lv_label_set_text(s_lbl_trip_odo, buf);
 
     snprintf(buf, sizeof(buf), "%.1f V", d->aux_volts);
     lv_label_set_text(s_lbl_aux_v, buf);

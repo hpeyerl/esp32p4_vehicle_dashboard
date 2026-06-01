@@ -101,6 +101,12 @@ esp_err_t vss_set_cal(float tire_circ_inches,
 float vss_get_pulses_per_mile(void);
 float vss_get_usec_per_pulse_at_1mph(void);
 
+// Odometer — accumulated from VSS pulses, total persisted in NVS.
+// Trip resets to zero on each boot; use vss_reset_trip() for manual reset.
+float vss_get_total_miles(void);
+float vss_get_trip_miles(void);
+void  vss_reset_trip(void);
+
 #ifdef __cplusplus
 }
 #endif
