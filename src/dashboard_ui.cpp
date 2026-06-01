@@ -22,7 +22,9 @@
 #include "dashboard_layout.h"
 #include "can_signals.h"
 #include "units.h"
+#include "wifi_manager.h"
 #include "lvgl.h"
+#include "esp_timer.h"
 #include <stdio.h>
 #include <math.h>
 #include <cstring>
@@ -80,6 +82,7 @@ static lv_obj_t *s_lbl_eff     = NULL;
 static lv_obj_t *s_lbl_trip    = NULL;
 static lv_obj_t *s_lbl_aux_v   = NULL;
 static lv_obj_t *s_dot_can     = NULL;
+static lv_obj_t *s_dot_wifi    = NULL;
 
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -511,14 +514,35 @@ void dashboard_ui_create(lv_display_t *disp)
                               &lv_font_montserrat_48);
     lv_obj_align(s_lbl_aux_v, LV_ALIGN_TOP_LEFT, 0, 226);
 
-    // ── CAN indicator dot ────────────────────────────────────────────────
-    s_dot_can = lv_obj_create(scr);
-    lv_obj_set_size(s_dot_can, 10, 10);
-    lv_obj_set_style_radius(s_dot_can, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(s_dot_can, CLR_GREEN, 0);
-    lv_obj_set_style_bg_opa(s_dot_can, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(s_dot_can, 0, 0);
-    lv_obj_set_pos(s_dot_can, W - 16, H - BOT_H - 16);
+    // ── CAN + WiFi status indicators (bottom of right panel, centered) ───────
+    {
+        lv_coord_t panel_cx = W - RIGHT_W / 2;  // horizontal center of right panel
+        lv_coord_t row_y    = MAIN_H - 42;      // near bottom of main area
+
+        // CAN indicator
+        lv_coord_t can_cx = panel_cx - 28;
+        s_dot_can = lv_obj_create(scr);
+        lv_obj_set_size(s_dot_can, 14, 14);
+        lv_obj_set_style_radius(s_dot_can, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(s_dot_can, CLR_RED, 0);
+        lv_obj_set_style_bg_opa(s_dot_can, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(s_dot_can, 0, 0);
+        lv_obj_set_pos(s_dot_can, can_cx - 7, row_y);
+        lv_obj_t *can_lbl = make_label(scr, "CAN", CLR_TEXT_DIM, &lv_font_montserrat_10);
+        lv_obj_set_pos(can_lbl, can_cx - 9, row_y + 17);
+
+        // WiFi indicator
+        lv_coord_t wifi_cx = panel_cx + 28;
+        s_dot_wifi = lv_obj_create(scr);
+        lv_obj_set_size(s_dot_wifi, 14, 14);
+        lv_obj_set_style_radius(s_dot_wifi, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(s_dot_wifi, CLR_RED, 0);
+        lv_obj_set_style_bg_opa(s_dot_wifi, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(s_dot_wifi, 0, 0);
+        lv_obj_set_pos(s_dot_wifi, wifi_cx - 7, row_y);
+        lv_obj_t *wifi_lbl = make_label(scr, "WiFi", CLR_TEXT_DIM, &lv_font_montserrat_10);
+        lv_obj_set_pos(wifi_lbl, wifi_cx - 10, row_y + 17);
+    }
 
     // ── Bottom nav bar ────────────────────────────────────────────────────
     lv_obj_t *nav = lv_obj_create(scr);
@@ -709,6 +733,23 @@ void dashboard_ui_update(const DashData *d)
 
     snprintf(buf, sizeof(buf), "%.1f V", d->aux_volts);
     lv_label_set_text(s_lbl_aux_v, buf);
+
+    // ── CAN + WiFi status indicators ──────────────────────────────────────
+    {
+        uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        bool can_ok  = !can_signal_stale(d->last_ms_0x355, now_ms, 2000);
+        bool wifi_ok = wifi_manager_is_connected();
+        static bool last_can_ok  = false;
+        static bool last_wifi_ok = false;
+        if (can_ok != last_can_ok) {
+            lv_obj_set_style_bg_color(s_dot_can, can_ok ? CLR_GREEN : CLR_RED, 0);
+            last_can_ok = can_ok;
+        }
+        if (wifi_ok != last_wifi_ok) {
+            lv_obj_set_style_bg_color(s_dot_wifi, wifi_ok ? CLR_GREEN : CLR_RED, 0);
+            last_wifi_ok = wifi_ok;
+        }
+    }
 
     // ── Cruise control ────────────────────────────────────────────────────
     {

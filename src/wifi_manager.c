@@ -33,6 +33,7 @@ static void prv_wifi_event_handler(void *arg, esp_event_base_t base,
         esp_wifi_connect();
         ESP_LOGD(TAG, "WiFi STA started — connecting");
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        xEventGroupClearBits(s_wifi_eg, WIFI_CONNECTED_BIT);
         if (s_retry < WIFI_MAX_RETRY) {
             esp_wifi_connect();
             s_retry++;
@@ -125,4 +126,10 @@ esp_err_t wifi_manager_start_ap(void)
     ESP_LOGI(TAG, "AP started  SSID=%s", OTA_AP_SSID);
     ESP_LOGI(TAG, "OTA UI:  http://192.168.4.1/");
     return ESP_OK;
+}
+
+bool wifi_manager_is_connected(void)
+{
+    if (!s_wifi_eg) return false;
+    return (xEventGroupGetBits(s_wifi_eg) & WIFI_CONNECTED_BIT) != 0;
 }
