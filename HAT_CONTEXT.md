@@ -94,7 +94,7 @@ and must not be used. All pins below are confirmed present on the headers.
 | 3    | IN        | EPB red LED (brake applied)     | EPB screw term |
 | 5    | IN        | VSS reed switch                 | VSS screw term |
 | 6    | OUT       | EPB button (active-low pulse)   | EPB screw term |
-| 20   | IN        | ADC dimmer (optional)           | — |
+| 20   | IN        | Display backlight dimmer (ADC)  | Dimmer screw term |
 | 45   | OUT       | MagneRide CH1 PWM               | 12V screw term |
 | 46   | OUT       | MagneRide CH2 PWM               | 12V screw term |
 | 47   | OUT       | MagneRide CH3 PWM (reserved)    | 12V screw term (DNP) |
@@ -107,12 +107,41 @@ DNP = Do Not Populate; footprint present for future use.
 
 ---
 
+## Vehicle Harness Interface (EVJ-55 Wiring Diagram)
+
+The hat + P4-Nano assembly is represented in EVJ-55 as component `DashDisplay`
+(label: `DashDisplay`, name: `ESP32-P4-Nano + Hat`). All 14 pins are wired:
+
+| Pin | Function | Connected to in EVJ-55 |
+|-----|----------|------------------------|
+| 1 | Sw12v+ | F21 (Controls 5A fuse) OUT ← IGN+ |
+| 2 | Gnd | Gnd bus |
+| 3 | CANHi | CAN bus |
+| 4 | CANLo | CAN bus |
+| 5 | EPB Out | PBCtrl pin 5 (Button) |
+| 6 | EPB Grn | PBCtrl pin 7 (LEDGreen) |
+| 7 | EPB Red | PBCtrl pin 8 (LEDRed) |
+| 8 | VSS | VSS Reed Switch (Signal) |
+| 9 | MgRide CH1 | MgRideL (Out+) |
+| 10 | MgRide CH2 | MgRideR (Out+) |
+| 11 | MgRide CH3 | — (DNP) |
+| 12 | MgRide CH4 | — (DNP) |
+| 13 | Dimmer | Dimmer (Signal) |
+| 14 | MagRide 12V+ | Bat+ (unswitched 12V for MOSFET supply) |
+
+---
+
 ## First Steps for the KiCad Session
 1. Fetch the P4-Nano schematic PDF and expansion header pinout from the Waveshare wiki.
-2. Confirm which GPIOs are physically present on the expansion headers (not all are broken out).
-3. Assign the 2 MagneRide PWM GPIOs from whatever is free and available on the headers.
-4. Create or import a KiCad footprint for the P4-Nano header positions.
-5. Place screw terminal footprints grouped by subsystem (CAN, EPB, MagneRide×2, VSS).
-6. Route power planes: 3.3V, 12V (MagneRide only), GND.
-7. Place and route SN65HVD230, MOSFETs, protection components.
-8. DRC + check thermal copper under MOSFET pads.
+   (GPIO assignments already verified against ESP32-P4-NANO-details-inter.jpg — see table above.)
+2. Create or import a KiCad footprint for the P4-Nano header positions and board outline.
+3. Place screw terminal footprints grouped by subsystem:
+   - Power: Sw12v+, MagRide 12V+, GND (×multiple)
+   - CAN: CANH, CANL (2-pos, 5.0 mm pitch)
+   - EPB: Out, Green, Red, GND (4-pos, 3.5 mm pitch)
+   - VSS: Signal, GND (2-pos, 3.5 mm pitch)
+   - MagneRide CH1–CH4: Out+, GND per channel (2-pos, 5.0 mm pitch; CH3/CH4 DNP)
+   - Dimmer: Signal, GND (2-pos, 3.5 mm pitch)
+4. Route power planes: 3.3V (logic), 12V (MagneRide supply only), GND.
+5. Place and route SN65HVD230, MOSFETs (D4184/AOD4184/LR7843), flyback diodes, gate resistors.
+6. DRC + check thermal copper under MOSFET pads.
