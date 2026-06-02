@@ -1,6 +1,6 @@
 # EV Dashboard — Project Context
 
-Last updated: 2026-06-02 (session 2)
+Last updated: 2026-06-02 (session 3)
 
 ## Hardware
 - **Board**: Waveshare ESP32-P4-Nano
@@ -227,18 +227,70 @@ handled by the conductor, not the link.
 }}}
 ```
 
+### Creating Nodes and Pages via API
+
+`AddNodeCommand` and `AddPageCommand` **must include an explicit `id` field** — without it the
+element gets key `"undefined"` in the store and is non-functional even after save. Same fix as
+`AddLinkCommand`. Generate IDs with the same `comp_<ts>_<9char>` / `page_<ts>_<9char>` format.
+Pins also need explicit `id` fields (`pin-<8hex>`) to be wirable via conductors.
+
+```json
+{"command": "AddNodeCommand", "params": {"node": {
+  "id": "comp_<ts>_<suffix>",
+  "type": "component", "label": "VSS", "name": "VSS Reed Switch",
+  "pins": [{"id": "pin-<8hex>", "label": "Signal"}, {"id": "pin-<8hex>", "label": "Gnd"}],
+  "position": {"x": 825, "y": 450}
+}}}
+```
+
+Newly created nodes land on whichever page was last "active" (determined by the most recent
+command that touched a node on that page). To land on a specific page, first issue any
+successful command involving an existing node on that page — this sets the active page context.
+
+**Multiple wires between same two nodes:** Create ONE link, attach all conductors to it.
+Creating multiple links between the same node pair triggers a "duplicate bundles" warning
+(Splice CAD auto-merges with `MergeDuplicateLinksCommand`).
+
 ### Known Broken Commands (as of @splice-cad/mcp v0.4.0)
-- `UpdateNodeCommand` — always fails: `"Cannot read properties of undefined (reading 'label')"`
-- `UpdateNodePinsCommand` — same error
-- `BulkEditPlanCommand` — `"undefined" is not valid JSON`
-- Workaround: make these edits manually in the browser, then save
+All reported to Splice CAD team.
+
+**Error `"Cannot read properties of undefined (reading 'label')"` — node editing:**
+- `UpdateNodeCommand`, `UpdateNodePinsCommand`, `BulkEditPlanCommand`
+- Workaround: rename/edit pins manually in the browser
+
+**Error `"Cannot read properties of undefined (reading 'length')"` — page assignment:**
+- `AssignToPageCommand`, `MoveToPageCommand`, `MoveNodeCommand`, `RemoveFromPageCommand`
+- Workaround: drag components to correct pages manually in the browser
 
 ### Notes
 - Ferrule nodes (X114 etc.) are created automatically by manual drawing as visual midpoints.
   API connections skip them — functionally equivalent.
-- `AddNodeCommand` via bridge does not persist IDs to server until browser save. After save,
-  fetch fresh `get_plan_summary` to get server-assigned component IDs.
 - Cross-page connections work: link + conductor between components on different pages renders
   correctly on the page where the source component lives.
 - Component names (e.g. "Zombie 10A", "Controls") are the canonical way to identify function.
   Labels (F11, K14) are positional designators.
+- `nodePageAssignments` in live state maps nodeId → [pageId, ...] (a node can appear on multiple
+  pages). `nodePagePositions` maps nodeId → {pageId: {x, y}}. These are the structures that
+  AssignToPageCommand/MoveToPageCommand are supposed to modify but currently cannot via API.
+
+### DashDisplay (ESP32-P4-Nano + Hat) — Wiring Status
+All 14 pins wired as of 2026-06-02:
+
+| Pin | Function | Connected to |
+|-----|----------|-------------|
+| 1 | Sw12v+ | F21 (Controls fuse) OUT |
+| 2 | Gnd | Gnd bus |
+| 3 | CANHi | CAN bus (existing) |
+| 4 | CANLo | CAN bus (existing) |
+| 5 | EPB Out | PBCtrl pin 5 (Button) |
+| 6 | EPB Grn | PBCtrl pin 7 (LEDGreen) |
+| 7 | EPB Red | PBCtrl pin 8 (LEDRed) |
+| 8 | VSS | VSS Reed Switch (Signal) |
+| 9 | MgRide CH1 | MgRideL (Out+) |
+| 10 | MgRide CH2 | MgRideR (Out+) |
+| 11 | MgRide CH3 | — (DNP) |
+| 12 | MgRide CH4 | — (DNP) |
+| 13 | Dimmer | Dimmer (Signal) |
+| 14 | MagRide 12V+ | Bat+ |
+
+F21 IN connected to IGN+ pin 10.
