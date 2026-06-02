@@ -1,6 +1,6 @@
 # EV Dashboard — Project Context
 
-Last updated: 2026-06-02
+Last updated: 2026-06-02 (session 2)
 
 ## Hardware
 - **Board**: Waveshare ESP32-P4-Nano
@@ -173,3 +173,72 @@ pio device monitor -e stub_debug --port /dev/ttyACM0
    - OVMS speaks its own protocol over MQTT or direct TCP; may need a bridge or custom OVMS module
    - Evaluate: does OVMS CAN sniffing overlap with our existing CAN parser? Could share the bus.
    - Low priority; investigate when LTE connectivity becomes a requirement
+
+## Splice CAD (EVJ-55 Wiring Diagram)
+
+Project `EVJ-55` (UUID `17410eef-ffcd-4a2a-adb7-dab94271a8f4`) on splice-cad.com contains the full
+vehicle wiring harness diagram. Edited via the `@splice-cad/mcp` MCP server in Claude Code.
+
+### MCP Server Setup
+- Configured in `~/.claude.json`, command: `/home/hpeyerl/.nvm/versions/node/v20.20.2/bin/node`
+- Args: `["/home/hpeyerl/.nvm/versions/node/v20.20.2/bin/npx", "-y", "@splice-cad/mcp"]`
+- Requires Node 18+ — system node is v12, must use nvm absolute path
+- Agent bridge listens on **Linux:9876** (the MCP server). Browser connects to it via SSH local tunnel
+  from Mac: `ssh -L 9876:localhost:9876 hpeyerl@<linux-box>` (NOT -R)
+
+### Creating Visible Wire Connections via API
+
+Two commands required — a link alone renders nothing on canvas.
+
+**1. Generate IDs** (format: `link_<unix_ms>_<9char_alphanum>`, same for `cond_`):
+```python
+import time, random, string
+ts = int(time.time() * 1000)
+suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=9))
+```
+
+**2. AddLinkCommand** — MUST include `id` or link is stored as `"undefined"` and never renders.
+Do NOT include `sourcePinId`/`targetPinId` — that also causes `id: undefined`. Pin routing is
+handled by the conductor, not the link.
+```json
+{"command": "AddLinkCommand", "params": {"link": {
+  "id": "link_<ts>_<suffix>",
+  "sourceNodeId": "comp_...",
+  "targetNodeId": "comp_..."
+}}}
+```
+
+**3. AddNewConductorCommand** — creates the visible wire with pin-level routing:
+```json
+{"command": "AddNewConductorCommand", "params": {"conductor": {
+  "id": "cond_<ts>_<suffix>",
+  "startEndpoint": {"nodeId": "comp_...", "pinId": "pin-..."},
+  "endEndpoint":   {"nodeId": "comp_...", "pinId": "pin-..."},
+  "linkPath": ["link_<ts>_<suffix>"],
+  "color": "red",
+  "gauge": "20 AWG"
+}}}
+```
+
+**RemoveLinkCommand** (also removes its conductors):
+```json
+{"command": "RemoveLinkCommand", "params": {"link": {
+  "sourceNodeId": "comp_...", "targetNodeId": "comp_..."
+}}}
+```
+
+### Known Broken Commands (as of @splice-cad/mcp v0.4.0)
+- `UpdateNodeCommand` — always fails: `"Cannot read properties of undefined (reading 'label')"`
+- `UpdateNodePinsCommand` — same error
+- `BulkEditPlanCommand` — `"undefined" is not valid JSON`
+- Workaround: make these edits manually in the browser, then save
+
+### Notes
+- Ferrule nodes (X114 etc.) are created automatically by manual drawing as visual midpoints.
+  API connections skip them — functionally equivalent.
+- `AddNodeCommand` via bridge does not persist IDs to server until browser save. After save,
+  fetch fresh `get_plan_summary` to get server-assigned component IDs.
+- Cross-page connections work: link + conductor between components on different pages renders
+  correctly on the page where the source component lives.
+- Component names (e.g. "Zombie 10A", "Controls") are the canonical way to identify function.
+  Labels (F11, K14) are positional designators.
