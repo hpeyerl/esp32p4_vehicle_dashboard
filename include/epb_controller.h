@@ -39,10 +39,10 @@ extern "C" {
   #define EPB_OUT_PIN    6    // output: normally HIGH, pulse LOW to press
 #endif
 #ifndef EPB_GREEN_PIN
-  #define EPB_GREEN_PIN  9    // input + pullup, active-low: brake RELEASED
+  #define EPB_GREEN_PIN  2    // input + pullup, active-low: brake RELEASED
 #endif
 #ifndef EPB_RED_PIN
-  #define EPB_RED_PIN   10    // input + pullup, active-low: brake APPLIED
+  #define EPB_RED_PIN    3    // input + pullup, active-low: brake APPLIED
 #endif
 
 // ── Timing ────────────────────────────────────────────────────

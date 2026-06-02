@@ -1,6 +1,6 @@
 # EV Dashboard — Project Context
 
-Last updated: 2026-05-30
+Last updated: 2026-06-02
 
 ## Hardware
 - **Board**: Waveshare ESP32-P4-Nano
@@ -9,7 +9,7 @@ Last updated: 2026-05-30
 - **CAN transceiver**: SN65HVD230 — wired to board (GPIO53 TX, GPIO48 RX), not yet connected to vehicle
 - **Flash**: GD25Q128, 16MB
 
-## Pin Assignments (verified against schematic)
+## Pin Assignments (verified against P4-Nano expansion header pinout)
 | Signal | GPIO | Notes |
 |---|---|---|
 | TWAI TX | 53 | |
@@ -23,8 +23,13 @@ Last updated: 2026-05-30
 | SDIO D2/Handshake | 16 | |
 | SDIO D3/DataReady | 17 | |
 | EPB output (button) | 6 | Active-low pulse ~200ms, normally HIGH |
-| EPB green LED input | 9 | Active-low + pullup, brake released |
-| EPB red LED input | 10 | Active-low + pullup, brake applied |
+| EPB green LED input | 2 | Active-low + pullup, brake released (was 9 — not on headers) |
+| EPB red LED input | 3 | Active-low + pullup, brake applied (was 10 — not on headers) |
+| MagneRide CH1 PWM | 45 | LEDC, 25 kHz, left shock |
+| MagneRide CH2 PWM | 46 | LEDC, 25 kHz, right shock |
+| MagneRide CH3 PWM | 47 | Reserved — DNP on hat |
+| MagneRide CH4 PWM | 33 | Reserved — DNP on hat |
+| Display backlight dimmer | 20 | ADC1_CH4 or LEDC PWM |
 
 ## Current Working State
 - WiFi connects via SDIO ESP-Hosted ✓
@@ -148,8 +153,8 @@ pio device monitor -e stub_debug --port /dev/ttyACM0
 9. EPB / Park button integration — This drivetrain has no Park or Neutral gear (only R and D).
    Park is a separate EPB controller with a momentary button and status LEDs (not CAN — direct GPIO).
    Hardware interface (P4-Nano GPIOs — exact pins TBD, defaults below):
-   - EPB_GREEN_PIN (default GPIO 9):  input + pullup, active-low -> brake RELEASED
-   - EPB_RED_PIN   (default GPIO 10): input + pullup, active-low -> brake APPLIED
+   - EPB_GREEN_PIN (GPIO 2):  input + pullup, active-low -> brake RELEASED
+   - EPB_RED_PIN   (GPIO 3):  input + pullup, active-low -> brake APPLIED
    - EPB_OUT_PIN   (default GPIO 6):  output, normally HIGH; pulse LOW ~200ms to press button
    - Both green+red active simultaneously = SERVICE MODE (10s hold hazard — never hold output low >9s)
    Module: epb_controller.c — GPIO init, state read, one-shot 200ms pulse timer
