@@ -1,6 +1,6 @@
 # EV Dashboard — Project Context
 
-Last updated: 2026-06-02 (session 3)
+Last updated: 2026-06-03
 
 ## Hardware
 - **Board**: Waveshare ESP32-P4-Nano
@@ -126,7 +126,8 @@ pio device monitor -e stub_debug --port /dev/ttyACM0
 ## TODO
 1. Connect SN65HVD230 to ZombieVerter CAN bus and test SDO
 2. ~~PRND touchable~~ DONE
-3. Arc layout tightening (Tesla-style brackets) — defer to real display
+3. Arc gradient effect (Rivian-style) — see below
+   Arc layout tightening — defer to real display
 4. ADC dimmer GPIO20 or GPIO21
 5. MJPEG color fix (byte-swap) — cosmetic only
 6. ~~CAN + WiFi status indicators~~ DONE
@@ -294,3 +295,28 @@ All 14 pins wired as of 2026-06-02:
 | 14 | MagRide 12V+ | Bat+ |
 
 F21 IN connected to IGN+ pin 10.
+
+## Arc Gradient Design (SOC + Power arcs)
+
+**Reference:** Rivian-style dashboard (see `2-1.png` in project root).
+
+**Target effect:** The SOC and Power arcs have a fixed pre-set gradient underneath
+(e.g., blue→white for SOC, amber→orange for power). A dark mask covers the "empty"
+portion. As the value changes, the filled portion sweeps to reveal the gradient —
+the leading edge acts as the pointer. The unfilled portion remains dim/dark.
+
+**Current implementation:** Solid `lv_arc` that switches color at thresholds
+(green→orange→red). This is wrong — entire arc recolors at each threshold.
+
+**Chosen approach: multi-segment arc (Option 1)**
+- Draw the arc as ~20 short arc segments, each color-interpolated along the gradient
+- Only render segments up to the current value (empty portion left dark/undrawn)
+- No LVGL gradient API needed — just `lv_draw_arc()` calls in a loop with lerp'd color
+- Tune gradient stop colors against the real display once it arrives
+
+**SOC arc gradient:** blue (#0080FF) → cyan (#00FFFF) → white (#FFFFFF) at 100%
+**Power arc gradient:** amber (#FF8C00) → orange (#FF4500), mirrored for regen side
+(exact colors TBD — tune visually on real display)
+
+**Defer implementation until display is in hand** — segment count and colors need
+visual tuning that can't be done headlessly.
