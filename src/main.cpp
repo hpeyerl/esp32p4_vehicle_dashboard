@@ -67,6 +67,12 @@ static void can_rx_task(void *arg)
             uint8_t dlc = msg.data_length_code < 8 ? msg.data_length_code : 8;
             memcpy(data, msg.data, dlc);
             uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+            // Log SDO responses so we can confirm TX reached ZombieVerter
+            if (msg.identifier == 0x583) {
+                ESP_LOGI(TAG, "RX 583# %02X %02X %02X %02X %02X %02X %02X %02X",
+                         data[0],data[1],data[2],data[3],
+                         data[4],data[5],data[6],data[7]);
+            }
             xSemaphoreTake(g_dash_mutex, portMAX_DELAY);
             parse_can_frame(msg.identifier, data, now_ms);
             xSemaphoreGive(g_dash_mutex);
@@ -149,6 +155,29 @@ static void ui_task(void *arg)
     }
 }
 
+// ── Periodic SDO TX task — tests CAN transmit ────────────────────────────
+// Sends an SDO schema fetch init request to ZombieVerter (node 3) every 3s.
+// Watch serial for "RX 583#..." response lines to confirm TX is working.
+static void sdo_ping_task(void *arg)
+{
+    vTaskDelay(pdMS_TO_TICKS(3000));  // let CAN settle first
+    while (1) {
+        // SDO Initiate Upload Request: read index 0x5001 sub 0x00 (ZV schema)
+        twai_message_t req = {
+            .identifier       = 0x603,   // SDO request to ZV node 3
+            .data_length_code = 8,
+            .data             = {0x40, 0x01, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00},
+        };
+        esp_err_t err = twai_transmit(&req, pdMS_TO_TICKS(50));
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "SDO TX OK → 0x603 [40 01 50 00 ...]");
+        } else {
+            ESP_LOGW(TAG, "SDO TX fail err=0x%x", (unsigned)err);
+        }
+        vTaskDelay(pdMS_TO_TICKS(3000));
+    }
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────
 extern "C" void app_main(void)
 {
@@ -164,8 +193,9 @@ extern "C" void app_main(void)
     display_init();
     twai_init();
 
-    xTaskCreatePinnedToCore(can_rx_task, "can_rx", 4096,  NULL, 10, NULL, 0);
-    xTaskCreatePinnedToCore(ui_task,     "ui",     12288, NULL,  5, NULL, 1);
+    xTaskCreatePinnedToCore(can_rx_task,  "can_rx",  4096,  NULL, 10, NULL, 0);
+    xTaskCreatePinnedToCore(ui_task,      "ui",      12288, NULL,  5, NULL, 1);
+    xTaskCreate(sdo_ping_task, "sdo_ping", 2048, NULL, 3, NULL);
 
     ESP_LOGI(TAG, "tasks running");
 }
