@@ -252,16 +252,34 @@ successful command involving an existing node on that page — this sets the act
 Creating multiple links between the same node pair triggers a "duplicate bundles" warning
 (Splice CAD auto-merges with `MergeDuplicateLinksCommand`).
 
-### Known Broken Commands (as of @splice-cad/mcp v0.4.0)
-All reported to Splice CAD team.
+### Correct Command Params (fixed in @splice-cad/mcp upgrade 2026-06-05)
 
-**Error `"Cannot read properties of undefined (reading 'label')"` — node editing:**
-- `UpdateNodeCommand`, `UpdateNodePinsCommand`, `BulkEditPlanCommand`
-- Workaround: rename/edit pins manually in the browser
+Use `mcp__splice-cad__describe_command` to look up exact params for any command.
 
-**Error `"Cannot read properties of undefined (reading 'length')"` — page assignment:**
-- `AssignToPageCommand`, `MoveToPageCommand`, `MoveNodeCommand`, `RemoveFromPageCommand`
-- Workaround: drag components to correct pages manually in the browser
+**UpdateNodeCommand** — key is `newValues` (not `updates` or `node`):
+```json
+{"nodeId": "comp_...", "newValues": {"name": "New Name"}}
+```
+
+**AssignToPageCommand** — key is `nodeIds` array (not `nodeId` string):
+```json
+{"pageId": "page_...", "nodeIds": ["comp_..."]}
+```
+
+**MoveNodeCommand** — requires BOTH `oldPosition` and `newPosition`:
+```json
+{"nodeId": "comp_...", "oldPosition": {"x": 0, "y": 0}, "newPosition": {"x": 100, "y": 200}}
+```
+
+**AddNodeCommand** — now has `pageId` param, no separate AssignToPage needed:
+```json
+{"node": {"id": "comp_<ts>_<suffix>", ...}, "pageId": "page_..."}
+```
+
+**AddLinkCommand** — also has `pageId`:
+```json
+{"link": {"id": "link_...", "sourceNodeId": "...", "targetNodeId": "..."}, "pageId": "page_..."}
+```
 
 ### Notes
 - Ferrule nodes (X114 etc.) are created automatically by manual drawing as visual midpoints.
@@ -270,9 +288,6 @@ All reported to Splice CAD team.
   correctly on the page where the source component lives.
 - Component names (e.g. "Zombie 10A", "Controls") are the canonical way to identify function.
   Labels (F11, K14) are positional designators.
-- `nodePageAssignments` in live state maps nodeId → [pageId, ...] (a node can appear on multiple
-  pages). `nodePagePositions` maps nodeId → {pageId: {x, y}}. These are the structures that
-  AssignToPageCommand/MoveToPageCommand are supposed to modify but currently cannot via API.
 
 ### DashDisplay (ESP32-P4-Nano + Hat) — Wiring Status
 All 14 pins wired as of 2026-06-02:
