@@ -42,7 +42,7 @@ This replaces several loose add-on boards currently wired point-to-point.
 ### 3. MagneRide Suspension Control (2 channels)
 - Controls magnetic shock absorbers via PWM duty cycle at 25 kHz (LEDC peripheral)
 - Each channel: 3–5 A at 12–14 V (vehicle battery voltage)
-- ESP32-P4 signals: 4× PWM GPIO outputs — CH1=GPIO45, CH2=GPIO46, CH3=GPIO47, CH4=GPIO33
+- ESP32-P4 signals: 4× PWM GPIO outputs — CH1=GPIO45, CH2=GPIO46, CH3=GPIO47, CH4=GPIO32
   (CH3/CH4 reserved for future scope; footprint and terminals included, unpopulated by default)
 - Per-channel circuit:
   - MOSFET: D4184, AOD4184, or LR7843 (logic-level N-channel, TO-252 or similar)

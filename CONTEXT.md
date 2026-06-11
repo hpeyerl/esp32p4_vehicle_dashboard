@@ -28,7 +28,7 @@ Last updated: 2026-06-03
 | MagneRide CH1 PWM | 45 | LEDC, 25 kHz, left shock |
 | MagneRide CH2 PWM | 46 | LEDC, 25 kHz, right shock |
 | MagneRide CH3 PWM | 47 | Reserved — DNP on hat |
-| MagneRide CH4 PWM | 33 | Reserved — DNP on hat |
+| MagneRide CH4 PWM | 32 | Reserved — DNP on hat |
 | Display backlight dimmer | 20 | ADC1_CH4 or LEDC PWM |
 
 ## Current Working State

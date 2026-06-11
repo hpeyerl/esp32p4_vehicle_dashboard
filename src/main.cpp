@@ -29,6 +29,7 @@
 #include "sdo_manager.h"
 #include "gear_shifter.h"
 #include "units.h"
+#include "hat_pins.h"
 
 #ifndef STRINGIFY
   #define STRINGIFY_(x) #x
@@ -38,10 +39,10 @@
 static const char *TAG = "ev_dash";
 
 #ifndef TWAI_TX_PIN
-  #define TWAI_TX_PIN  53
+  #define TWAI_TX_PIN  HAT_TWAI_TX
 #endif
 #ifndef TWAI_RX_PIN
-  #define TWAI_RX_PIN  54
+  #define TWAI_RX_PIN  HAT_TWAI_RX
 #endif
 
 static lv_display_t      *g_disp       = NULL;
