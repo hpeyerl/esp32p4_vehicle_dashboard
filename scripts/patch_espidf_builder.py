@@ -63,5 +63,23 @@ try:
             print("[patch_espidf] patched esp_wifi_remote CMakeLists.txt (dummy_src.c fix)")
         else:
             print("[patch_espidf] esp_wifi_remote already patched or not found")
+
+        # ── Patch wifi_sources duplicate ninja target conflict ─────────────────
+        # get_target_property(wifi_sources) includes wifi_default.c, wifi_netif.c,
+        # wifi_default_ap.c which are already compiled by esp_wifi. When added again
+        # via target_sources(), Ninja sees two compile actions for the same .o file.
+        old2 = '    get_target_property(wifi_sources ${wifi} SOURCES)\n    # [patched] removed duplicate dummy_src.c registration (pioarduino fix)'
+        new2 = ('    get_target_property(wifi_sources ${wifi} SOURCES)\n'
+                '    # [patched] removed duplicate dummy_src.c registration (pioarduino fix)\n'
+                '    # [patched] filter files already compiled by esp_wifi to avoid duplicate ninja targets\n'
+                '    list(FILTER wifi_sources EXCLUDE REGEX "wifi_default[^/]*\\\\.c$")\n'
+                '    list(FILTER wifi_sources EXCLUDE REGEX "wifi_netif\\\\.c$")')
+        if old2 in content:
+            content = content.replace(old2, new2)
+            with open(wifi_remote_cmake, 'w') as f:
+                f.write(content)
+            print("[patch_espidf] patched esp_wifi_remote CMakeLists.txt (wifi_sources duplicate fix)")
+        elif 'list(FILTER wifi_sources' in content:
+            print("[patch_espidf] esp_wifi_remote wifi_sources filter already applied")
 except Exception as e:
     print(f"[patch_espidf] esp_wifi_remote patch failed: {e}")
