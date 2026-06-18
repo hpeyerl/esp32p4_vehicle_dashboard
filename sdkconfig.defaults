@@ -5,8 +5,13 @@ CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
 CONFIG_ESP32P4_REV_MIN_1=y
 
 # ── PSRAM ─────────────────────────────────────────────────────
+# CONFIG_SPIRAM_SPEED_200M is non-deterministic on this board: a fresh
+# power-on sometimes calibrates fine, sometimes hangs forever in an infinite
+# "set to best phase: 0" DQS retry loop, regardless of L2 cache size. Not
+# shippable. Turns out PSRAM speed was never the real bug anyway — see
+# waveshare_display.c for the actual fix (DSI command-sequencing, not
+# bandwidth). Stick with the stable 20MHz default.
 CONFIG_SPIRAM=y
-CONFIG_SPIRAM_SPEED_200M=y
 
 # ── Flash ─────────────────────────────────────────────────────
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y

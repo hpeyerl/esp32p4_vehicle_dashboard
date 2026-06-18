@@ -1,147 +1,280 @@
-# ESP32-P4-Nano Hat — KiCad Design Context
+# ESP32-P4-Nano Hat — Design Context (Updated 2026-06-18)
 
 ## Goal
-Design a "hat" PCB for the Waveshare ESP32-P4-Nano that consolidates all external vehicle
-interface circuitry onto one board. The hat plugs onto the P4-Nano's expansion headers and
-exposes all vehicle wiring via **screw terminals** (no .1" headers for external cabling).
-
-This replaces several loose add-on boards currently wired point-to-point.
+A 2-layer HAT PCB for the Waveshare ESP32-P4-Nano consolidating all vehicle interface
+circuitry. Plugs onto P4-Nano expansion headers, exposes all vehicle wiring via LM3.5
+clone 3.5mm pitch screw terminals (side-entry, pluggable).
 
 ---
 
-## Host Board
-**Waveshare ESP32-P4-Nano**
-- Schematic and pinout: https://www.waveshare.com/wiki/ESP32-P4-Nano
-- The hat must mate with the P4-Nano's expansion connector(s) — verify exact header
-  positions, pitch, and mechanical envelope from the Waveshare wiki before laying out
-  the PCB outline.
+## Physical Configuration
+
+### Board
+- **Size**: 99 × 85mm, 2-layer, JLCPCB Economic assembly (THT parts hand-soldered)
+- **Origin**: Top-left corner at KiCad absolute (66.04, 44.45)
+- **Pi HAT mounting holes**: M2.5, 58×49mm pattern centred on board
+  - Top-left: (86.54, 62.45), Top-right: (144.54, 62.45)
+  - Bot-left: (86.54, 111.45), Bot-right: (144.54, 111.45)
+- **No Nano mounting holes** — P1/P2 friction + enclosure backshell retains Nano
+
+### P4-Nano Orientation
+- Component-side **DOWN**, rotated **90° CW**
+- **P1** (26-pin) along **right edge** of Nano footprint, pin 1 top-right
+- **P2** (26-pin) along **left edge** of Nano footprint, pin 1 top-right
+- **DSI + Ethernet + USB-Host** exit **bottom-left** of Nano
+- **USB-C** exits **top** of Nano (into top strip — clearance required)
+- Nano body: 50×50mm, centred on board at approximately (115.54, 86.95)
+
+### J1/J2 Header Positions (confirmed by physical measurement + 1:1 print)
+- **J1 (P1, right edge)**: x=137.795, y=67.95 — on B.Cu, flipped
+- **J2 (P2, left edge)**: x=93.285, y=67.95 — on B.Cu, flipped
+- Pin 1 of both headers at y=67.95 (6mm from Nano top edge at y=61.95)
+- Header span: y=67.95 to y=98.43 (13 pins × 2.54mm)
+- **Tall female sockets required**: minimum 11.5mm height to clear USB-Host (14.1mm)
 
 ---
 
-## Subsystems to include on the hat
+## Connector Layout
 
-### 1. CAN Bus Transceiver
-- IC: SN65HVD230 (3.3V CAN transceiver, already purchased and wired loose)
-- ESP32-P4 signals: GPIO 53 = TWAI TX, GPIO 48 = TWAI RX
-- External: CANH / CANL to a 2-position screw terminal (plus optional shield/GND terminal)
-- Power: 3.3V from P4-Nano
-- Optional: 120 Ω termination resistor footprint with a solder-bridge jumper to enable/disable
+### Left Flank (x≈71, side-entry facing left, orientation=-90)
+Chained together at 3.5mm pitch:
+- **J_DISP_PWR1** (2-pos): y=75.3 — +5V/GND for display, GND=pin1, 75mm bare-wire stub
+- **J_CAN1** (3-pos): y=82.3 — CANH/CANL/SHIELD
+- **J_VSS_IN1** (3-pos): y=92.8 — VSS/GND/+12V
 
-### 2. Electronic Parking Brake (EPB) Interface
-- Signal-level only — no power switching required
-- ESP32-P4 signals:
-  - GPIO 6:  output, normally HIGH; pulse LOW ~200ms to "press" EPB button (open-drain to vehicle)
-  - GPIO 2:  input + pullup, active-low — EPB green LED wire (brake RELEASED)
-  - GPIO 3:  input + pullup, active-low — EPB red LED wire (brake APPLIED)
-- External: 3-position screw terminal (OUT, GREEN, RED) + GND
-- Protection: TVS or 5V zener clamp on each input; series resistor on output
-- Note: GPIO 6 output drives a brown wire that sinks current to "press" the EPB button.
-  The vehicle side is a NO momentary contact — an NPN transistor or small MOSFET to
-  pull the wire to ground is appropriate. Do NOT rely solely on GPIO drive strength.
+### Right Flank (x≈160.2, side-entry facing right, orientation=+90)
+Chained together at 3.5mm pitch:
+- **J_DIM1** (2-pos): y=121.2 — DIM/GND (ADC input, kept away from MR switching)
+- **J_EPB1** (4-pos): y=114.2 — EPB_OUT/GRN/RED/GND (pin1 at top)
 
-### 3. MagneRide Suspension Control (2 channels)
-- Controls magnetic shock absorbers via PWM duty cycle at 25 kHz (LEDC peripheral)
-- Each channel: 3–5 A at 12–14 V (vehicle battery voltage)
-- ESP32-P4 signals: 4× PWM GPIO outputs — CH1=GPIO45, CH2=GPIO46, CH3=GPIO47, CH4=GPIO32
-  (CH3/CH4 reserved for future scope; footprint and terminals included, unpopulated by default)
-- Per-channel circuit:
-  - MOSFET: D4184, AOD4184, or LR7843 (logic-level N-channel, TO-252 or similar)
-  - Gate resistor: 10–22 Ω to limit switching transients
-  - Flyback diode: 1N5408 or UF5408, placed as close to the shock connector as possible
-  - Bulk capacitor across drain supply rail (e.g. 100 µF electrolytic) per channel
-- External: per channel — 2-position screw terminal (12V switched output + GND return)
-  Plus a shared 12V input screw terminal (fused externally, but add a polarity protection
-  diode or P-FET in series if space allows)
-- Thermal: MOSFETs dissipate ~0.5–1 W at full load with these parts; copper pour under
-  thermal pad is sufficient, no heatsink needed at this current level
-- Duty cycle range: ~35% = comfort (soft), higher = stiffer/sport
-- Safety: firmware ramps duty gradually — no instant step changes
+### Bottom Strip (side-entry facing down)
+Chained at 3.5mm pitch, centred:
+- **J_MR1–J_MR4** (four 2-pos) — SW_OUT/GND per MagneRide channel
+- **J_12V_IN1** (2-pos) — +12V_INT/GND, FUSE 10A, + on pin1, PULL FUSE BEFORE USB
 
-**GPIO assignment note:** All assignments are verified against the P4-Nano expansion header
-pinout (ESP32-P4-NANO-details-inter.jpg). GPIOs 9 and 10 are NOT broken out on the headers
-and must not be used. All pins below are confirmed present on the headers.
-
-### 4. VSS (Vehicle Speed Sensor) Input
-- Signal: reed switch pulse, ~12 pulses per meter of vehicle travel (verify with owner)
-- ESP32-P4 signal: GPIO 5, input with internal pullup already configured in firmware
-- External: 2-position screw terminal (VSS signal + GND)
-- Protection: 5V zener + series resistor to handle any inductive spikes on the reed switch wire
-- The reed switch is a dry contact — one side to GND, other side to GPIO 5 terminal
+### Top Strip
+- **J3 / J_STEMMA1** — JST-SH BM04B 4-pin STEMMA QT, I2C (SCL/SDA/3V3/GND)
+  Future: Adafruit MCP23017 breakout for stalk/clock spring inputs
 
 ---
 
-## Design Constraints
+## Subsystem Zones (Top Strip, left to right)
+1. **J_DISP area** — far left near FPC/display adapter. See "DSI Pass-Through
+   Connectors" section below for the two FPC connectors and routing this
+   zone now needs (added 2026-06-18, after discovering both candidate
+   off-the-shelf 15-to-22-pin adapter cables had bad/wrong-standard wiring).
+2. **CAN IC** — U1 SN65HVD230 SOIC-8
+3. **3V3 BUCK** — U2 LMR14030SDDAR SOIC-8, L1 22uH SRR1260,
+   C_IN1 10uF 1210, C_IN2 100nF 0402, C_OUT1 22uF 1210,
+   C_OUT2/C_BOOT 100nF 0402, R_FB1 1MΩ, R_FB2 300kΩ
+   Vout = 0.75 × (1 + 1000/300) = 3.25V ✓
+4. **5V BUCK** — U3 LM2596S-5 TO-263-5, L2 68uH SRR1260,
+   C2/C3 100uF radial THT, D2 SS34 SMA
+   ON/OFF pin → GPIO4 (was hard-tied GND) + R_5V_EN1 10k pull-up to
+   3V3 — fail-safe default OFF, firmware drives LOW to enable display power
+5. **J3 STEMMA QT** — top strip right area
 
-- **All external wiring uses screw terminals** — no .1" headers for anything that goes
-  to the vehicle. Phoenix Contact or equivalent 3.5 mm or 5.0 mm pitch depending on
-  current rating (use 5.0 mm for MagneRide power, 3.5 mm acceptable for signal lines).
-- **P4-Nano header connectors**: use standard 2.54 mm female pin headers to mate with
-  the P4-Nano's male expansion pins. Verify pin count and position from Waveshare wiki.
-- **Power**: derive 3.3V from P4-Nano header (confirm available current). MagneRide 12V
-  comes from vehicle via its own screw terminal — do not route through the P4-Nano.
-- **Board outline**: size to match or slightly overhang the P4-Nano footprint. Confirm
-  P4-Nano dimensions from Waveshare wiki (approximately 25.4 × 50.8 mm — verify).
-- **Mounting**: plan for at least 2 M3 standoff holes aligned with P4-Nano mounting holes.
-- **Labeling**: silkscreen all screw terminals clearly (signal name + polarity).
+## Bottom Strip Zones
+- **MagneRide MOSFETs**: Q1–Q4 AOD4184A TO-252, one per channel
+  - Gate resistors R_MR1_G–R_MR4_G: 10Ω 0402 (C138066)
+  - Gate pulldowns R_MR1_PD–R_MR4_PD: 10kΩ 0402
+  - Flyback diodes D_MR1–D_MR4: UF5408 DO-201AD vertical CathodeUp THT
+  - Bulk caps C_MR1–C_MR4: 100uF radial THT, one per MOSFET drain
+  - F.Cu copper pour island +12V_INT under MOSFET drains + thermal vias to B.Cu
+- **Power input**: D1 P4SMA40A TVS, D_REVP1 SS34 reverse polarity
 
----
-
-## GPIO Summary Table (verified against P4-Nano expansion header pinout)
-
-| GPIO | Direction | Function                        | Terminal |
-|------|-----------|---------------------------------|----------|
-| 2    | IN        | EPB green LED (brake released)  | EPB screw term |
-| 3    | IN        | EPB red LED (brake applied)     | EPB screw term |
-| 5    | IN        | VSS reed switch                 | VSS screw term |
-| 6    | OUT       | EPB button (active-low pulse)   | EPB screw term |
-| 20   | IN        | Display backlight dimmer (ADC)  | Dimmer screw term |
-| 45   | OUT       | MagneRide CH1 PWM               | 12V screw term |
-| 46   | OUT       | MagneRide CH2 PWM               | 12V screw term |
-| 47   | OUT       | MagneRide CH3 PWM (reserved)    | 12V screw term (DNP) |
-| 33   | OUT       | MagneRide CH4 PWM (reserved)    | 12V screw term (DNP) |
-| 48   | IN        | TWAI RX                         | internal (SN65HVD230) |
-| 53   | OUT       | TWAI TX                         | internal (SN65HVD230) |
-| 54   | —         | C6 Reset/EN (do not connect)    | — |
-
-DNP = Do Not Populate; footprint present for future use.
-
----
-
-## Vehicle Harness Interface (EVJ-55 Wiring Diagram)
-
-The hat + P4-Nano assembly is represented in EVJ-55 as component `DashDisplay`
-(label: `DashDisplay`, name: `ESP32-P4-Nano + Hat`). All 14 pins are wired:
-
-| Pin | Function | Connected to in EVJ-55 |
-|-----|----------|------------------------|
-| 1 | Sw12v+ | F21 (Controls 5A fuse) OUT ← IGN+ |
-| 2 | Gnd | Gnd bus |
-| 3 | CANHi | CAN bus |
-| 4 | CANLo | CAN bus |
-| 5 | EPB Out | PBCtrl pin 5 (Button) |
-| 6 | EPB Grn | PBCtrl pin 7 (LEDGreen) |
-| 7 | EPB Red | PBCtrl pin 8 (LEDRed) |
-| 8 | VSS | VSS Reed Switch (Signal) |
-| 9 | MgRide CH1 | MgRideL (Out+) |
-| 10 | MgRide CH2 | MgRideR (Out+) |
-| 11 | MgRide CH3 | — (DNP) |
-| 12 | MgRide CH4 | — (DNP) |
-| 13 | Dimmer | Dimmer (Signal) |
-| 14 | MagRide 12V+ | Bat+ (unswitched 12V for MOSFET supply) |
+## Right Flank Components (near J_EPB/J_DIM)
+- **Q5** 2N7002 SOT-23 — EPB open-drain output
+- **DZ1, DZ2** BZX84-C5V1 SOT-23 — EPB input clamps
+- **R_EPB_G1** 1kΩ 0402 (C11702) — EPB gate
+- **R_EPB_GRN1, R_EPB_RED1** 33Ω 0402 (C25105) — EPB input series
+- **R_EPB_PD1** 10kΩ 0402 — EPB pulldown
+- **D_Z_DIM1** BZX84C5V1W SOT-23 — dimmer ADC clamp
+- **R_DIM_10K1** 10kΩ 0402 — dimmer pulldown
+- **R_VSS_10K1** 10kΩ 0402 — VSS pulldown
+- **D_Z_VSS1** BZX84C5V1W SOT-23 — VSS clamp
 
 ---
 
-## First Steps for the KiCad Session
-1. Fetch the P4-Nano schematic PDF and expansion header pinout from the Waveshare wiki.
-   (GPIO assignments already verified against ESP32-P4-NANO-details-inter.jpg — see table above.)
-2. Create or import a KiCad footprint for the P4-Nano header positions and board outline.
-3. Place screw terminal footprints grouped by subsystem:
-   - Power: Sw12v+, MagRide 12V+, GND (×multiple)
-   - CAN: CANH, CANL (2-pos, 5.0 mm pitch)
-   - EPB: Out, Green, Red, GND (4-pos, 3.5 mm pitch)
-   - VSS: Signal, GND (2-pos, 3.5 mm pitch)
-   - MagneRide CH1–CH4: Out+, GND per channel (2-pos, 5.0 mm pitch; CH3/CH4 DNP)
-   - Dimmer: Signal, GND (2-pos, 3.5 mm pitch)
-4. Route power planes: 3.3V (logic), 12V (MagneRide supply only), GND.
-5. Place and route SN65HVD230, MOSFETs (D4184/AOD4184/LR7843), flyback diodes, gate resistors.
-6. DRC + check thermal copper under MOSFET pads.
+## Keepout Zones (to be placed in PCB editor)
+- **USB-C clearance** (Eco1.User): above Nano top edge, x≈104–117, projects ~8mm up
+- **ETH+USB-Host** (Dwgs.User note): bottom-left corner of Nano, exits downward
+  approximately x=90.54–112, y=111.95–126 — avoid tall components here
+
+---
+
+## Power Architecture
+- **+12V_INT**: vehicle battery via J_12V_IN, fused 10A externally
+  - D_REVP1 reverse polarity protection
+  - D1 TVS transient suppression
+  - Feeds MagneRide MOSFETs and buck regulators
+- **+3.3V**: LMR14030 buck from +12V_INT, ~1A capacity
+- **+5V**: LM2596S-5 buck from +12V_INT, ~3A capacity → J_DISP_PWR
+  - ON/OFF gated by GPIO4 (P1 pin12) + 10k pull-up to 3V3 (default OFF,
+    firmware drives LOW to enable). Lets firmware power-cycle the display
+    for hang recovery, and removes the display's onboard 3.3V regulator's
+    source (stops it backfeeding ESP_3V3 via the DSI cable) when off.
+- **GND**: B.Cu full pour
+- **+12V_INT pour**: F.Cu island in MagneRide zone only
+
+---
+
+## GPIO Summary
+
+| GPIO | Direction | Function | Net |
+|------|-----------|----------|-----|
+| 2 | IN | EPB green LED (brake released) | EPB_GRN |
+| 3 | IN | EPB red LED (brake applied) | EPB_RED |
+| 4 | OUT | Display 5V rail enable (active-low, 10k pull-up = default OFF) | 5V0_ENABLE |
+| 5 | IN | VSS reed switch | VSS |
+| 6 | OUT | EPB button (active-low pulse) | EPB_OUT |
+| 7 | I2C SDA | GT911 touch (via DSI FPC, P1 pin3) — RESERVED, not a HAT signal | SDA |
+| 8 | I2C SCL | GT911 touch (via DSI FPC, P1 pin5) — RESERVED, not a HAT signal | SCL |
+| 20 | IN (ADC) | Display backlight dimmer | DIM |
+| 32 | OUT | MagneRide CH4 PWM (DNP) | MR_CH4 |
+| 45 | OUT | MagneRide CH1 PWM | MR_CH1 |
+| 46 | OUT | MagneRide CH2 PWM | MR_CH2 |
+| 47 | OUT | MagneRide CH3 PWM (DNP) | MR_CH3 |
+| 48 | IN | TWAI RX | TWAI_RX |
+| 53 | OUT | TWAI TX | TWAI_TX |
+
+---
+
+## BOM Summary (JLCPCB LCSC parts)
+
+| Ref | Value | LCSC | Package |
+|-----|-------|------|---------|
+| U1 | SN65HVD230 | C12084 | SOIC-8 |
+| U2 | LMR14030SDDAR | C182078 | SOIC-8 |
+| U3 | LM2596S-5 | C194349 | TO-263-5 |
+| Q1-Q4 | AOD4184A | C99124 | TO-252-2 |
+| Q5 | 2N7002 | C8545 | SOT-23 |
+| L1 | 22uH SRR1260 | C3911669 | SMD |
+| L2 | 68uH SRR1260 | C2041353 | SMD |
+| D1 | P4SMA40A | C506023 | SMA |
+| D2, D_REVP1 | SS34 | C8678 | SMA |
+| D_MR1-4 | UF5408 | C424502 | DO-201AD Vertical |
+| DZ1, DZ2 | BZX84-C5V1 | C27131 | SOT-23 |
+| D_Z_DIM1, D_Z_VSS1 | BZX84C5V1W | C27131 | SOT-23 |
+| C_IN1, C_OUT1 | 10uF/22uF 1210 | C386170/C19659 | 1210 |
+| C_IN2, C_OUT2, C_BOOT | 100nF 0402 | C49678 | 0402 |
+| C2,C3,C_MR1-4 | 100uF | C2960218 | Radial THT |
+| R_FB1 | 1MΩ 0402 1% | C138033 | 0402 |
+| R_FB2 | 300kΩ 0402 1% | C138011 | 0402 |
+| R_MR gate | 10Ω 0402 1% | C138066 | 0402 |
+| R_MR PD, R_EPB_PD, R_DIM, R_VSS, R_5V_EN1 | 10kΩ 0402 | C25744 | 0402 |
+| R_EPB_G | 1kΩ 0402 | C11702 | 0402 |
+| R_EPB_GRN/RED | 33Ω 0402 | C25105 | 0402 |
+| J3/J_STEMMA | JST SH BM04B | C424993 | SMD vertical |
+| J1, J2 | 2×13 socket DNP | — | PinSocket_2x13_P2.54mm |
+| J_DSI_NANO | 15-pin 1mm FPC | TBD — match Nano connector datasheet | FPC ZIF |
+| J_DSI_DISP | 22-pin 0.5mm FPC | TBD — match display connector datasheet | FPC ZIF |
+
+**All screw terminals**: DNP, LM3.5 clone 3.5mm pitch, hand-soldered from stock
+**THT parts** (hand-solder): C2/C3/C_MR1-4 electrolytic caps, D_MR1-4 diodes, J1/J2 headers
+
+---
+
+## DSI Pass-Through Connectors (P4-Nano ↔ Display) — added 2026-06-18
+
+**Why this exists:** the display only needs +5V/GND from the hat
+(`J_DISP_PWR`) for power — the actual DSI video signal never needs to pass
+near the hat at all electrically. But after burning a full day chasing a
+DSI hang that turned out to be a bad/wrong-standard 22-pin-to-15-pin
+adapter cable (see `CONTEXT.md` → "DSI Adapter Cable Pinout" for the full
+story), routing the DSI signals *through* the hat — with the correct
+mapping baked into PCB traces instead of relying on an off-the-shelf
+cable's unstated internal wiring — turns one hard, error-prone cable
+problem into two trivial ones.
+
+### Connectors needed
+
+- **J_DSI_NANO** — 15-pin, 1mm pitch FPC, matching the P4-Nano's own DSI
+  connector (labeled "J1 / 15PIN--PI4B" on the Nano's schematic). Fed by a
+  **short, straight-through, same-pitch, same-pin-count pigtail** from the
+  Nano's DSI port — about the lowest-risk cable there is, easy to verify
+  with one continuity check if in doubt.
+- **J_DSI_DISP** — 22-pin, 0.5mm pitch FPC, matching the display's DSI
+  connector. Takes whatever cable/tail comes off the Waveshare 12.3"
+  display.
+- Exact connector part numbers (contact orientation — top vs bottom —
+  pitch, ZIF vs non-ZIF) need to be selected during layout to match the
+  real Nano and display connector datasheets. Don't guess; confirm against
+  datasheet drawings or physical measurement before ordering, the way the
+  J1/J2 header positions were confirmed by 1:1 print earlier in this doc.
+
+### Routing table (PCB traces between J_DSI_NANO and J_DSI_DISP)
+
+Differential pairs — **polarity matters**, a P/N swap silently reintroduces
+the same class of bug that cost a full day of debugging:
+
+| J_DSI_NANO pin | Signal | → | J_DSI_DISP pin | Signal |
+|---|---|---|---|---|
+| 1 | DSI_D1_N | → | 18 | MIPI_D1_N |
+| 2 | DSI_D1_P | → | 17 | MIPI_D1_P |
+| 4 | DSI_CLK_N | → | 15 | MIPI_CLK_N |
+| 5 | DSI_CLK_P | → | 14 | MIPI_CLK_P |
+| 7 | DSI_D0_N | → | 21 | MIPI_D0_N |
+| 8 | DSI_D0_P | → | 20 | MIPI_D0_P |
+
+Single-ended:
+
+| J_DSI_NANO pin | Signal | → | J_DSI_DISP pin | Signal |
+|---|---|---|---|---|
+| 10 | ESP_I2C_SCL | → | 3 | I2C_SCL |
+| 11 | ESP_I2C_SDA | → | 2 | I2C_SDA |
+| 14, 15 | 3V3 | → | 1 | 3V3 (both Nano 3V3 pins may land on the same pad/net) |
+
+**GND**: bus J_DSI_NANO pins 3,6,9,12,13 together, bus J_DSI_DISP pins
+4,7,10,13,16,19,22 together, single net tying the two buses. Same GND
+plane as the rest of the board — no separate jumper needed once it's all
+one net in the PCB editor.
+
+**Leave unconnected**: J_DSI_DISP pins 5,6 (RESERVE), 8,9 (`MIPI_D3_P/N`),
+11,12 (`MIPI_D2_P/N`) — the Nano has no D2/D3 lanes at all, nothing on
+J_DSI_NANO needs to land on these.
+
+### Routing notes
+- These are 950Mbps differential pairs (D0, D1, CLK) — keep P/N lengths
+  matched within each pair, keep traces as short as practical, avoid
+  unnecessary layer changes/vias on these specific traces if the layout
+  allows it.
+- Physical placement: near the existing "J_DISP area" (far left of top
+  strip, per Subsystem Zones above) — that's already where the Nano's own
+  DSI/Ethernet/USB-Host connectors exit (bottom-left of the Nano footprint,
+  per Physical Configuration), so it's the natural place for J_DSI_NANO to
+  sit close to its source.
+
+---
+
+## Current PCB Status (2026-06-17)
+- Schematic: ERC clean
+- PCB scaffold v0.5 generated, footprints imported via Update PCB from Schematic
+- **Placement in progress** — partially placed, session ended mid-placement
+
+### Placed and positioned:
+- J1/J2 headers (B.Cu, positions confirmed by 1:1 print)
+- J_DISP_PWR, J_CAN, J_VSS (left flank, chained)
+- J_EPB, J_DIM (right flank, chained)
+- J_MR1-4, J_12V_IN (bottom strip, chained)
+- J3 STEMMA (top strip)
+- Q1-Q4 MOSFETs (bottom strip, rough position)
+- U1, U2, L1 (top strip, rough position)
+
+### Still to place:
+1. C_MR1-4 — move near Q1-Q4 in bottom strip (one per MOSFET drain)
+2. U3 + L2 — move into 5V buck zone in top strip
+3. Q1-Q4 + D_MR1-4 — group together, diodes tight to drains
+4. Q5 + R_EPB_G/GRN/RED/PD + DZ1/DZ2 + D_Z_DIM1 — near J_EPB/J_DIM right flank
+5. D1 TVS + D_REVP1 — near J_12V_IN
+6. Define ETH/USB-Host/USB-C keepout zones on Dwgs.User/Eco1.User
+7. All remaining passives (R_FB1/2, R_MR gate/PD, R_VSS, R_DIM, D_Z_VSS1, C_IN/OUT/BOOT)
+8. **NEW (2026-06-18)**: J_DSI_NANO + J_DSI_DISP — place near existing J_DISP
+   area (far left, top strip), select real connector parts matching both
+   datasheets, route per "DSI Pass-Through Connectors" section above
+   (differential pairs, length-matched, polarity-checked)
+
+### After placement:
+- Routing: GND pour B.Cu, +12V_INT island F.Cu MagneRide zone
+- Critical: SW node U2→L1 short fat trace, FB divider away from SW node
+- Net classes already defined: Default 0.25mm, Power 1.0mm, 12V_Power 2.0mm

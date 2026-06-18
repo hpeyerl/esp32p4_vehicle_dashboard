@@ -70,10 +70,25 @@
 //
 // 5V display rail: LM2596S-5.0 buck, +12V_INT -> 5V/3A.
 //   Feeds Waveshare 12.3-DSI-TOUCH-A via J_DISP_PWR (requires 5V/1A min).
+//   ON/OFF pin now under firmware control — see HAT_DISP_PWR_EN below.
 //
 // 12V MagneRide rail: +12V_INT from J_12V_IN via D_REVP (SS34 Schottky).
 //   Feeds MOSFET drains and VSS sensor supply only.
 //   Fuse externally (10A blade fuse recommended).
+
+// ── Display 5V Power Enable ──────────────────────────────────────────────────
+// LM2596S-5 ON/OFF pin: active-HIGH = disabled/shutdown, LOW/GND = enabled
+// (per datasheet). Previously hard-tied to GND (always on); now routed to
+// GPIO4 so firmware can power-cycle the display rail for recovery from a
+// hung DSI link, and so the display's onboard 3.3V touch/logic regulator
+// loses its source (and stops backfeeding ESP_3V3 via the DSI cable) when
+// intentionally powered off.
+// 10k pull-up to 3V3 (R_5V_EN1, net 5V0_ENABLE) sets the default/unconfigured state to
+// HIGH = OFF — display stays unpowered (fail-safe) until firmware explicitly
+// drives this pin LOW.
+#define HAT_DISP_PWR_EN     GPIO_NUM_4    // P1 pin12  -> LM2596S-5 ON/OFF
+// gpio_set_level(HAT_DISP_PWR_EN, 0);  // enable display 5V rail
+// gpio_set_level(HAT_DISP_PWR_EN, 1);  // disable display 5V rail (or let float high via pull-up)
 
 // ── EPB helper (implement in application code) ────────────────────────────────
 // void epb_press(void) {

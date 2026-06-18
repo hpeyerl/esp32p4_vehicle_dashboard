@@ -1,6 +1,6 @@
 # EV Dashboard — Project Context
 
-Last updated: 2026-06-03
+Last updated: 2026-06-18
 
 ## Hardware
 - **Board**: Waveshare ESP32-P4-Nano
@@ -153,6 +153,9 @@ pio device monitor -e stub_debug --port /dev/ttyACM0
     - Safety: in Auto mode, gradual ramp (not instant step) to avoid harsh transition
 9. EPB / Park button integration — This drivetrain has no Park or Neutral gear (only R and D).
    Park is a separate EPB controller with a momentary button and status LEDs (not CAN — direct GPIO).
+   ~~GPIO wiring + LED status reading~~ DONE (2026-06-17) — bench tested on real hardware,
+   red LED correctly indicates brake applied, green LED correctly indicates brake released.
+   Still open: UI dot, gear-automation safety logic (see below), EPB_OUT button-press testing.
    Hardware interface (P4-Nano GPIOs — exact pins TBD, defaults below):
    - EPB_GREEN_PIN (GPIO 2):  input + pullup, active-low -> brake RELEASED
    - EPB_RED_PIN   (GPIO 3):  input + pullup, active-low -> brake APPLIED
@@ -174,6 +177,161 @@ pio device monitor -e stub_debug --port /dev/ttyACM0
    - OVMS speaks its own protocol over MQTT or direct TCP; may need a bridge or custom OVMS module
    - Evaluate: does OVMS CAN sniffing overlap with our existing CAN parser? Could share the bus.
    - Low priority; investigate when LTE connectivity becomes a requirement
+
+## Waveshare Display Bring-Up — Debugging Log (2026-06-18)
+
+Display is now physically wired to the P4-Nano. First real boot attempts on
+`waveshare_usb` exposed several real bugs, fixed in this order:
+
+1. **`scripts/patch_espidf_builder.py` idempotency bug** (fixed) — its
+   wifi_sources patch re-applied on every single build, corrupting
+   `managed_components/espressif__esp_wifi_remote/CMakeLists.txt` with
+   duplicate blocks and an overly-broad regex that stripped
+   `wifi_default_ap.c` from the wrong target, causing a "WiFi header
+   mismatch" build error. Fixed the idempotency check and the regex; cleaned
+   up the corrupted managed_components file.
+2. **DSI PHY never powered** (fixed) — ESP32-P4's `VDD_MIPI_DPHY` rail needs
+   an internal LDO channel (3, 2500mV) acquired via `esp_ldo_acquire_channel`
+   before `esp_lcd_new_dsi_bus()`. Without it the PHY PLL lock loop in
+   `esp_lcd_new_dsi_bus()` spins forever (no timeout in ESP-IDF's HAL).
+   Added to `src/waveshare_display.c` `prv_panel_init()`.
+3. **AXI-ICM DW-GDMA priority boost** (added, probably harmless/minor) —
+   boosted DW-GDMA master-port arbiter priority via `axi_icm_ll_set_dw_gdma_qos_arbiter_prio()`.
+   Added `hal`/`soc` to `src/CMakeLists.txt` PRIV_REQUIRES for this.
+4. **PSRAM at 200MHz is unreliable on this board** (abandoned) — tried
+   matching the working `tab5` branch's PSRAM/cache config
+   (`CONFIG_SPIRAM_SPEED_200M` + `CONFIG_CACHE_L2_CACHE_256KB`, needs
+   `CONFIG_IDF_EXPERIMENTAL_FEATURES`). DQS calibration is genuinely
+   non-deterministic on THIS p4-nano — same firmware/config sometimes
+   calibrates fine, sometimes hangs forever in an infinite
+   "set to best phase: 0" retry loop. Also tried `CONFIG_SPIRAM_XIP_FROM_PSRAM`
+   (from tab5) — hung even earlier, during flash→PSRAM segment copy. Not
+   shippable; reverted to the stable `CONFIG_SPIRAM_SPEED_20M` default.
+5. **Real bug: DISPON sent after video streaming already started** (fixed,
+   but see open issue below) — `esp_lcd_hx8399`'s `panel_hx8399_init()` calls
+   `hx8399->init(panel)` (which starts the DPI video engine) as its last
+   step, inside `esp_lcd_panel_init()`. Our app then called
+   `esp_lcd_panel_disp_on_off(s_panel, true)` *afterward*, sending a DBI
+   command while video was already streaming. ESP-IDF's
+   `mipi_dsi_hal_host_gen_write_dcs_command()` has an unconditional,
+   timeout-free `while(cmd_fifo_full);` spin — if the DSI host never reopens
+   a command window after video starts, this hangs the whole CPU core
+   forever (eventually trips the task watchdog, repeating every 5s, no
+   reset). Fix: moved the Display ON (0x29) command into
+   `s_hx8399_init_cmds[]` itself (sent *before* `hx8399->init()` triggers
+   video), removed the separate `disp_on_off()` call. See comments in
+   `src/waveshare_display.c` around line ~170 and `prv_panel_init()`.
+
+### Open issue / where we left off
+
+The same `cmd_fifo_full` hang signature is **still occurring**, but now at a
+different, earlier point: in `esp_lcd_panel_reset()`'s software-reset path
+(since our `panel_cfg.reset_gpio_num = -1` — we do our own hardware reset via
+GPIO27 in `prv_lcd_reset()` first — the HX8399 driver's `reset()` falls
+through to sending `LCD_CMD_SWRESET` via DBI as a "software reset", which is
+the very first DBI transaction of the whole boot). Log evidence: after a
+hardware GPIO27 reset + 120ms settling delay, the very first DCS command sent
+to the panel hangs in the FIFO-full wait — "send init commands success"
+never even gets logged.
+
+**Important confound**: all testing so far has used `esptool.py ... run`
+(EN-pin pulse) between attempts, NOT a true power cycle. An EN-pin reset
+resets the SoC's digital logic but does **not** power-cycle the display
+panel — the panel's internal state (e.g. still mid-video-stream from the
+previous boot) persists across an EN-only reset. This is suspected to
+explain the apparent non-determinism (same as the PSRAM DQS flakiness):
+behavior may depend on what state the panel was left in before each
+EN-pulse reset, not on randomness in the SoC.
+
+**Next step**: do a genuine **full power cycle** — disconnect both the
+USB-C (P4-Nano) and the bench supply (display 5V/GND) completely, wait
+~10s, reconnect both together, then capture the boot log. If "send init
+commands success" and beyond now happens reliably, the EN-only-reset theory
+is confirmed and the real fix is either (a) always testing via full power
+cycles, or (b) adding a true panel power-down/up sequence (not just GPIO
+reset) before DSI bus init when we can't trust a cold start.
+
+**HX8399-C datasheet acquired**: full register-level datasheet (incl. Himax
+internal SETGIP0-3 bit-field docs) saved as `HX8399-C_datasheet.pdf` in repo
+root (source: https://dl.espressif.com/AE/esp-iot-solution/HX8399-C_DS_temporary_v00.06_150714.pdf).
+Confirms 2-lane mode (`SETMIPI`/0xBA `LAN_NUM=01`) is a fully documented,
+intended chip feature, independent of GIP timing (SETGIP0-3) — no documented
+coupling between lane count and GIP register values. This substantially
+weakens the "2-lane forces invalid GIP timing" theory raised during the
+2026-06-18 session — the 4-lane-derived GIP array we're using should remain
+valid in 2-lane mode. Still worth the Pi test to confirm empirically, but the
+panel hardware/cable should no longer be the prime suspect for the
+fifo-full hang — that's more likely still a P4-Nano-side sequencing/timing
+issue, or the unverified custom DSI adapter cable.
+
+**Separate wiring note**: the display backfeeds the P4-Nano's `ESP_3V3` net
+through the DSI connector (display's local 3.3V regulator, fed from the
+bench 5V, drives current backward onto the P4-Nano's normally-off onboard
+3.3V regulator output whenever USB-C is unplugged — confirmed by the power
+LED staying lit). Not fatal for now, but worth fixing later (power P4-Nano
+from the same supply whenever bench-powering the display, or add a series
+Schottky diode on that net) since two regulator outputs fighting risks
+component stress over repeated sessions.
+
+### DSI Adapter Cable Pinout (confirmed 2026-06-18)
+
+User's P4-Nano↔display cable is a custom adapter (15-pin/1mm-pitch FFC on the
+P4-Nano end, 22-pin/0.5mm-pitch FFC on the display end) bought without a
+pin-mapping table from the vendor. Confirmed both connectors' real pinouts
+from the schematic (P4-Nano, labeled "15PIN--PI4B" in `ESP32-P4-NANO-schematic.pdf`)
+and the display's official pinout diagram (Waveshare product page):
+
+**P4-Nano J1 (15-pin)**: 1=DSI_D1_N, 2=DSI_D1_P, 3=GND, 4=DSI_CLK_N,
+5=DSI_CLK_P, 6=GND, 7=DSI_D0_N, 8=DSI_D0_P, 9=GND, 10=ESP_I2C_SCL,
+11=ESP_I2C_SDA, 12=GND, 13=GND, 14=3V3, 15=3V3.
+
+**Display (22-pin)**: 1=3V3, 2=I2C_SDA, 3=I2C_SCL, 4/7/10/13/16/19/22=GND,
+5/6=RESERVE, 8/9=MIPI_D3_P/N, 11/12=MIPI_D2_P/N, 14/15=MIPI_CLK_P/N,
+17/18=MIPI_D1_P/N, 20/21=MIPI_D0_P/N. Power (5V) is on a SEPARATE 8-pin
+connector, not on this 22-pin DSI ribbon at all — display's actual 5V/GND
+comes via a JST connector elsewhere on the board.
+
+**Required cross-reference** (only 2 of the display's 4 lanes are used,
+since P4-Nano only has D0/D1 wired):
+| P4-Nano pin | Display pin | Signal |
+|---|---|---|
+| 1/2 | 18/17 | DSI_D1_N/P ↔ MIPI_D1_N/P |
+| 4/5 | 15/14 | DSI_CLK_N/P ↔ MIPI_CLK_N/P |
+| 7/8 | 21/20 | DSI_D0_N/P ↔ MIPI_D0_N/P |
+| 10 | 3 | I2C_SCL |
+| 11 | 2 | I2C_SDA |
+| 14/15 | 1 | 3V3 |
+| 3/6/9/12/13 | 4/7/10/13/16/19/22 | GND |
+
+**Verified with a multimeter (2026-06-18) — both candidate cables are bad:**
+- The original Amazon 22-to-15 adapter has confirmed internal miswiring:
+  P4-Nano pin 12 (GND) lands on Display pin 14 (`MIPI_CLK_P`), and P4-Nano
+  pin 4 (`DSI_CLK_N`) lands on Display pin 8 (`MIPI_D3_P`). Both clock lines
+  compromised — abandoned.
+- A second cable (came bundled with a 3rd-party Pi camera) is genuinely
+  1:1/straight, but its 15-pin end was very likely built to the classic
+  Raspberry Pi 15-pin **CSI** ordering, not **DSI** — confirmed via RPi forums
+  that 15-pin CSI and DSI use different pin orders from each other (unlike
+  the newer 22-pin Pi5/CM4 generation, where CSI/DSI ARE pin-identical).
+  P4-Nano's connector has D1/CLK/D0 at positions 2-3/5-6/8-9; Pi5/CM4's 22-pin
+  standard has D0/D1/C at those relative positions — a lane-order mismatch
+  consistent with "this cable matches CSI, not DSI." Not pursued further
+  empirically since the conclusion was clear either way — abandoned.
+
+**Decision: hand-build a custom breakout-to-breakout adapter** rather than
+keep gambling on off-the-shelf cables with unstated internal wiring. Plan
+(rainy-day project, not yet built as of 2026-06-18): two Proto-Advantage
+FPC/FFC SMT breakout boards (one per connector pitch), short FPC pigtails
+into each, hand-soldered jumpers between the two boards' SMT pads per the
+table above. Practical notes for the build:
+- **Differential pairs (D0, D1, CLK) — polarity matters.** Get P/N exactly
+  right; a swap silently reintroduces the same class of bug as today.
+- **GND**: don't wire 5-to-7 point-to-point. Bus all of P4-Nano's GND pins
+  (3,6,9,12,13) together on that board, bus all of the display's GND pins
+  (4,7,10,13,16,19,22) together on its board, single jumper between the two
+  buses. Electrically identical, far less error-prone.
+- **Leave unconnected**: display pins 5,6 (RESERVE), 8,9 (`MIPI_D3_P/N`),
+  11,12 (`MIPI_D2_P/N`) — P4-Nano has no D2/D3 lanes at all.
 
 ## Splice CAD (EVJ-55 Wiring Diagram)
 

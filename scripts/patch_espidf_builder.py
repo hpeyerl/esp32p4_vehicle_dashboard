@@ -68,18 +68,30 @@ try:
         # get_target_property(wifi_sources) includes wifi_default.c, wifi_netif.c,
         # wifi_default_ap.c which are already compiled by esp_wifi. When added again
         # via target_sources(), Ninja sees two compile actions for the same .o file.
+        # wifi_default_ap.c must stay in wifi_sources (it needs esp_wifi_remote's
+        # injected headers) — it's removed from esp_wifi's own SOURCES instead, below.
+        marker2 = '# [patched] remove wifi_default_ap.c from esp_wifi'
         old2 = '    get_target_property(wifi_sources ${wifi} SOURCES)\n    # [patched] removed duplicate dummy_src.c registration (pioarduino fix)'
         new2 = ('    get_target_property(wifi_sources ${wifi} SOURCES)\n'
                 '    # [patched] removed duplicate dummy_src.c registration (pioarduino fix)\n'
-                '    # [patched] filter files already compiled by esp_wifi to avoid duplicate ninja targets\n'
-                '    list(FILTER wifi_sources EXCLUDE REGEX "wifi_default[^/]*\\\\.c$")\n'
-                '    list(FILTER wifi_sources EXCLUDE REGEX "wifi_netif\\\\.c$")')
-        if old2 in content:
+                '    # [patched] filter files that esp_wifi also compiles directly to avoid duplicate ninja targets.\n'
+                '    # wifi_default_ap.c is NOT filtered here — it needs injected headers so must be compiled via\n'
+                '    # wifi_sources with esp_wifi_remote\'s include path. It is removed from esp_wifi\'s SOURCES below.\n'
+                '    list(FILTER wifi_sources EXCLUDE REGEX "/wifi_default\\\\.c$")\n'
+                '    list(FILTER wifi_sources EXCLUDE REGEX "/wifi_netif\\\\.c$")\n'
+                '    # [patched] remove wifi_default_ap.c from esp_wifi\'s own source list so only esp_wifi_remote\n'
+                '    # compiles it (with injected headers). Without this it fails with WiFi header mismatch.\n'
+                '    get_target_property(esp_wifi_srcs ${wifi} SOURCES)\n'
+                '    list(FILTER esp_wifi_srcs EXCLUDE REGEX "/wifi_default_ap\\\\.c$")\n'
+                '    set_target_properties(${wifi} PROPERTIES SOURCES "${esp_wifi_srcs}")')
+        if marker2 in content:
+            print("[patch_espidf] esp_wifi_remote wifi_sources filter already applied")
+        elif old2 in content:
             content = content.replace(old2, new2)
             with open(wifi_remote_cmake, 'w') as f:
                 f.write(content)
             print("[patch_espidf] patched esp_wifi_remote CMakeLists.txt (wifi_sources duplicate fix)")
-        elif 'list(FILTER wifi_sources' in content:
-            print("[patch_espidf] esp_wifi_remote wifi_sources filter already applied")
+        else:
+            print("[patch_espidf] esp_wifi_remote wifi_sources patch point not found — skipping")
 except Exception as e:
     print(f"[patch_espidf] esp_wifi_remote patch failed: {e}")
