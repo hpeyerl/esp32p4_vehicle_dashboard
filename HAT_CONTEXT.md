@@ -167,8 +167,8 @@ Chained at 3.5mm pitch, centred:
 | R_EPB_GRN/RED | 33Ω 0402 | C25105 | 0402 |
 | J3/J_STEMMA | JST SH BM04B | C424993 | SMD vertical |
 | J1, J2 | 2×13 socket DNP | — | PinSocket_2x13_P2.54mm |
-| J_DSI_NANO | 15-pin 1mm FPC | TBD — match Nano connector datasheet | FPC ZIF |
-| J_DSI_DISP | 22-pin 0.5mm FPC | TBD — match display connector datasheet | FPC ZIF |
+| J_DSI_NANO | BXCONN FC-10D15P11H25, 15P 1mm bottom contact, SMD right-angle | C23397345 | FPC ZIF |
+| J_DSI_DISP | HanElectricity 05A20L22P, 22P 0.5mm bottom contact, SMD right-angle | C22435644 | FPC ZIF |
 
 **All screw terminals**: DNP, LM3.5 clone 3.5mm pitch, hand-soldered from stock
 **THT parts** (hand-solder): C2/C3/C_MR1-4 electrolytic caps, D_MR1-4 diodes, J1/J2 headers
@@ -193,15 +193,23 @@ problem into two trivial ones.
   connector (labeled "J1 / 15PIN--PI4B" on the Nano's schematic). Fed by a
   **short, straight-through, same-pitch, same-pin-count pigtail** from the
   Nano's DSI port — about the lowest-risk cable there is, easy to verify
-  with one continuity check if in doubt.
+  with one continuity check if in doubt. **Confirmed part (2026-06-18)**:
+  BXCONN `FC-10D15P11H25`, LCSC `C23397345` — bottom contact, SMD
+  right-angle, slide lock, 1455 in stock, ~$0.09/unit. (An alternative,
+  Hirose/HDGC `1.0K-FX-15PWB` C2914074, has identical spec but only 3
+  units in stock — passed over for that reason.)
 - **J_DSI_DISP** — 22-pin, 0.5mm pitch FPC, matching the display's DSI
   connector. Takes whatever cable/tail comes off the Waveshare 12.3"
-  display.
-- Exact connector part numbers (contact orientation — top vs bottom —
-  pitch, ZIF vs non-ZIF) need to be selected during layout to match the
-  real Nano and display connector datasheets. Don't guess; confirm against
-  datasheet drawings or physical measurement before ordering, the way the
-  J1/J2 header positions were confirmed by 1:1 print earlier in this doc.
+  display. **Confirmed part (2026-06-18)**: HanElectricity `05A20L22P`,
+  LCSC `C22435644` — bottom contact (matches Waveshare's own Pi reference
+  photo, confirmed contacts-down earlier this session), SMD right-angle,
+  hinged-lid actuator, 753 in stock, ~$0.07/unit.
+- Both connectors confirmed bottom-contact — consistent orientation
+  convention between the two, which simplifies sourcing/checking the
+  pigtail cables. Still worth a physical/datasheet double-check against
+  the real Nano and display connectors before ordering in volume, the way
+  the J1/J2 header positions were confirmed by 1:1 print earlier in this
+  doc — but both picks are well-specified, in-stock, real parts now.
 
 ### Routing table (PCB traces between J_DSI_NANO and J_DSI_DISP)
 
