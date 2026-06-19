@@ -273,17 +273,22 @@ from the same supply whenever bench-powering the display, or add a series
 Schottky diode on that net) since two regulator outputs fighting risks
 component stress over repeated sessions.
 
-### DSI Adapter Cable Pinout (confirmed 2026-06-18)
+### DSI Adapter Cable Pinout (confirmed 2026-06-18, corrected 2026-06-19)
 
 User's P4-Nano↔display cable is a custom adapter (15-pin/1mm-pitch FFC on the
 P4-Nano end, 22-pin/0.5mm-pitch FFC on the display end) bought without a
 pin-mapping table from the vendor. Confirmed both connectors' real pinouts
 from the schematic (P4-Nano, labeled "15PIN--PI4B" in `ESP32-P4-NANO-schematic.pdf`)
-and the display's official pinout diagram (Waveshare product page):
+and the display's official pinout diagram (Waveshare product page).
 
-**P4-Nano J1 (15-pin)**: 1=DSI_D1_N, 2=DSI_D1_P, 3=GND, 4=DSI_CLK_N,
-5=DSI_CLK_P, 6=GND, 7=DSI_D0_N, 8=DSI_D0_P, 9=GND, 10=ESP_I2C_SCL,
-11=ESP_I2C_SDA, 12=GND, 13=GND, 14=3V3, 15=3V3.
+**Correction (2026-06-19)**: the P4-Nano pinout below was originally
+mis-read by one position (D1 starting at pin 1 instead of pin 2). Herb
+caught this live by re-checking the schematic directly — corrected version
+below, also fixed in `HAT_CONTEXT.md`. The display's 22-pin pinout was
+correct from the start; only the Nano side shifted.
+
+**P4-Nano J1 (15-pin)**: 1,4,7,10,13=GND, 2,3=DSI_D1_N/P, 5,6=DSI_CLK_N/P,
+8,9=DSI_D0_N/P, 11=ESP_I2C_SCL, 12=ESP_I2C_SDA, 14,15=3V3.
 
 **Display (22-pin)**: 1=3V3, 2=I2C_SDA, 3=I2C_SCL, 4/7/10/13/16/19/22=GND,
 5/6=RESERVE, 8/9=MIPI_D3_P/N, 11/12=MIPI_D2_P/N, 14/15=MIPI_CLK_P/N,
@@ -295,19 +300,23 @@ comes via a JST connector elsewhere on the board.
 since P4-Nano only has D0/D1 wired):
 | P4-Nano pin | Display pin | Signal |
 |---|---|---|
-| 1/2 | 18/17 | DSI_D1_N/P ↔ MIPI_D1_N/P |
-| 4/5 | 15/14 | DSI_CLK_N/P ↔ MIPI_CLK_N/P |
-| 7/8 | 21/20 | DSI_D0_N/P ↔ MIPI_D0_N/P |
-| 10 | 3 | I2C_SCL |
-| 11 | 2 | I2C_SDA |
+| 2/3 | 18/17 | DSI_D1_N/P ↔ MIPI_D1_N/P |
+| 5/6 | 15/14 | DSI_CLK_N/P ↔ MIPI_CLK_N/P |
+| 8/9 | 21/20 | DSI_D0_N/P ↔ MIPI_D0_N/P |
+| 11 | 3 | I2C_SCL |
+| 12 | 2 | I2C_SDA |
 | 14/15 | 1 | 3V3 |
-| 3/6/9/12/13 | 4/7/10/13/16/19/22 | GND |
+| 1/4/7/10/13 | 4/7/10/13/16/19/22 | GND |
 
-**Verified with a multimeter (2026-06-18) — both candidate cables are bad:**
+**Verified with a multimeter (2026-06-18) — both candidate cables are bad.**
+Note: the physical buzz-out results themselves haven't changed, only which
+signal name each physical pin maps to (per the 2026-06-19 correction above):
 - The original Amazon 22-to-15 adapter has confirmed internal miswiring:
-  P4-Nano pin 12 (GND) lands on Display pin 14 (`MIPI_CLK_P`), and P4-Nano
-  pin 4 (`DSI_CLK_N`) lands on Display pin 8 (`MIPI_D3_P`). Both clock lines
-  compromised — abandoned.
+  P4-Nano pin 12 (`ESP_I2C_SDA`, not GND as originally misattributed) lands
+  on Display pin 14 (`MIPI_CLK_P`), and P4-Nano pin 4 (`GND`, not CLK_N)
+  lands on Display pin 8 (`MIPI_D3_P`). SDA landing on the display's actual
+  clock pin is just as fatal to the DSI link as the original (incorrect)
+  "GND on clock" description — conclusion unchanged, abandoned.
 - A second cable (came bundled with a 3rd-party Pi camera) is genuinely
   1:1/straight, but its 15-pin end was very likely built to the classic
   Raspberry Pi 15-pin **CSI** ordering, not **DSI** — confirmed via RPi forums
@@ -327,11 +336,21 @@ table above. Practical notes for the build:
 - **Differential pairs (D0, D1, CLK) — polarity matters.** Get P/N exactly
   right; a swap silently reintroduces the same class of bug as today.
 - **GND**: don't wire 5-to-7 point-to-point. Bus all of P4-Nano's GND pins
-  (3,6,9,12,13) together on that board, bus all of the display's GND pins
+  (1,4,7,10,13) together on that board, bus all of the display's GND pins
   (4,7,10,13,16,19,22) together on its board, single jumper between the two
   buses. Electrically identical, far less error-prone.
 - **Leave unconnected**: display pins 5,6 (RESERVE), 8,9 (`MIPI_D3_P/N`),
   11,12 (`MIPI_D2_P/N`) — P4-Nano has no D2/D3 lanes at all.
+- **Before trusting this for the actual build**: physically verify pin 1 /
+  contact-side orientation on the real connectors, not just datasheet
+  figures — datasheet pin numbering can differ from physical/silkscreen
+  pin-1 marking. This exact class of mistake (an unverified assumption
+  about pin numbering) is what cost a full day earlier in this session;
+  the hand-built breakout board should confirm orientation against known
+  Nano GND pins before any signal pin is trusted.
+- See also `HAT_CONTEXT.md` → "DSI Pass-Through Connectors" for the
+  PCB-trace version of this same routing table (longer-term fix: route
+  DSI through the HAT itself instead of a hand-wired adapter).
 
 ## Splice CAD (EVJ-55 Wiring Diagram)
 

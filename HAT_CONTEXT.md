@@ -1,4 +1,4 @@
-# ESP32-P4-Nano Hat — Design Context (Updated 2026-06-18)
+# ESP32-P4-Nano Hat — Design Context (Updated 2026-06-19)
 
 ## Goal
 A 2-layer HAT PCB for the Waveshare ESP32-P4-Nano consolidating all vehicle interface
@@ -213,34 +213,98 @@ problem into two trivial ones.
 
 ### Routing table (PCB traces between J_DSI_NANO and J_DSI_DISP)
 
+**Verification history (2026-06-18):** the original table below this line
+(now superseded) was derived from a Raspberry Pi forum post screenshot
+claiming CM4IO pinout. Cross-checked against two independent primary
+sources before trusting it for PCB traces:
+1. Official CM4IO datasheet, Figure 4, page 10
+   (`https://datasheets.raspberrypi.com/cm4io/cm4io-datasheet.pdf`) —
+   read directly off the published schematic diagram.
+2. P4-Nano's own schematic, 15-pin connector — read directly by Herb.
+Both reads are structurally consistent (GND every 3rd/4th pin, SCL/SDA/3V3
+grouped at one end) and physically consistent with the observed
+bottom-contact/top-contact flip on the Waveshare-supplied cable (pin 1 on
+one end mates with pin 22 on the other — full mirror, not a straight
+pin-N-to-pin-N mapping). The forum-derived table was **wrong** — different
+GND positions, different NC positions, SCL/SDA at opposite end. This combo
+of bad table + unverified off-the-shelf cable is the likely root cause of
+the DSI hang that cost a full day earlier in bring-up.
+
+J_DSI_NANO is CM4IO/Pi5 DISP0 (2-channel, 2 data lanes: D0, D1 + CLK — no
+D2/D3 broken out on this interface at all, consistent with the Nano's
+15-pin connector only carrying D0/D1/CLK). Waveshare's display is
+explicitly CM4-compatible (2-lane), so this is the correct interface for
+this pairing — no need to chase the 4-lane DISP1/CAM1 pinout.
+
+**J_DSI_NANO (15-pin, 1mm pitch, Nano-side):**
+
+| Pin | Signal |
+|---|---|
+| 1,4,7,10,13 | GND |
+| 2,3 | D1_N, D1_P |
+| 5,6 | CLK_N, CLK_P |
+| 8,9 | D0_N, D0_P |
+| 11 | SCL |
+| 12 | SDA |
+| 14,15 | 3V3 |
+
+**J_DSI_DISP (22-pin, 0.5mm pitch, display-side) — contact-side-corrected
+(mirrored) mapping**, accounting for the bottom/top contact flip observed
+on the Waveshare cable (pin layout is a full end-to-end mirror: pin N on
+the as-read CM4IO figure corresponds to pin (23-N) once the connector is
+flipped to bottom-contact to match J_DSI_NANO's orientation):
+
+| Pin | Signal |
+|---|---|
+| 1 | 3V3 |
+| 2 | SDA |
+| 3 | SCL |
+| 4,7,10,13,16,19,22 | GND |
+| 5,6,8,9,11,12 | NC |
+| 14,15 | CLK_P, CLK_N |
+| 17,18 | D1_P, D1_N |
+| 20,21 | D0_P, D0_N |
+
+**Routing table (PCB traces), matched by signal name:**
+
 Differential pairs — **polarity matters**, a P/N swap silently reintroduces
 the same class of bug that cost a full day of debugging:
 
 | J_DSI_NANO pin | Signal | → | J_DSI_DISP pin | Signal |
 |---|---|---|---|---|
-| 1 | DSI_D1_N | → | 18 | MIPI_D1_N |
-| 2 | DSI_D1_P | → | 17 | MIPI_D1_P |
-| 4 | DSI_CLK_N | → | 15 | MIPI_CLK_N |
-| 5 | DSI_CLK_P | → | 14 | MIPI_CLK_P |
-| 7 | DSI_D0_N | → | 21 | MIPI_D0_N |
-| 8 | DSI_D0_P | → | 20 | MIPI_D0_P |
+| 2 | D1_N | → | 18 | D1_N |
+| 3 | D1_P | → | 17 | D1_P |
+| 5 | CLK_N | → | 15 | CLK_N |
+| 6 | CLK_P | → | 14 | CLK_P |
+| 8 | D0_N | → | 21 | D0_N |
+| 9 | D0_P | → | 20 | D0_P |
 
 Single-ended:
 
 | J_DSI_NANO pin | Signal | → | J_DSI_DISP pin | Signal |
 |---|---|---|---|---|
-| 10 | ESP_I2C_SCL | → | 3 | I2C_SCL |
-| 11 | ESP_I2C_SDA | → | 2 | I2C_SDA |
+| 11 | SCL | → | 3 | SCL |
+| 12 | SDA | → | 2 | SDA |
 | 14, 15 | 3V3 | → | 1 | 3V3 (both Nano 3V3 pins may land on the same pad/net) |
 
-**GND**: bus J_DSI_NANO pins 3,6,9,12,13 together, bus J_DSI_DISP pins
+**GND**: bus J_DSI_NANO pins 1,4,7,10,13 together, bus J_DSI_DISP pins
 4,7,10,13,16,19,22 together, single net tying the two buses. Same GND
 plane as the rest of the board — no separate jumper needed once it's all
 one net in the PCB editor.
 
-**Leave unconnected**: J_DSI_DISP pins 5,6 (RESERVE), 8,9 (`MIPI_D3_P/N`),
-11,12 (`MIPI_D2_P/N`) — the Nano has no D2/D3 lanes at all, nothing on
-J_DSI_NANO needs to land on these.
+**Leave unconnected**: J_DSI_DISP pins 5,6,8,9,11,12 (NC on this
+2-channel/2-lane interface) — the Nano has no D2/D3 lanes, nothing on
+J_DSI_NANO needs to land on these. Display is confirmed CM4-compatible
+(2-lane) per Waveshare's own documentation, so this is expected and correct,
+not a gap to chase down.
+
+**Still to verify before trusting this for trace routing**: physically
+confirm pin 1 location/orientation marking on both real connectors (not
+just datasheet figures) — datasheet pin numbering conventions occasionally
+differ from silkscreen/physical pin-1 marking. The hack breakout board
+Herb is building should do exactly this as its first job, ideally with a
+continuity buzzer back to the Nano's known-good GND pins as a sanity check
+before any signal pins are trusted.
 
 ### Routing notes
 - These are 950Mbps differential pairs (D0, D1, CLK) — keep P/N lengths
@@ -277,10 +341,16 @@ J_DSI_NANO needs to land on these.
 5. D1 TVS + D_REVP1 — near J_12V_IN
 6. Define ETH/USB-Host/USB-C keepout zones on Dwgs.User/Eco1.User
 7. All remaining passives (R_FB1/2, R_MR gate/PD, R_VSS, R_DIM, D_Z_VSS1, C_IN/OUT/BOOT)
-8. **NEW (2026-06-18)**: J_DSI_NANO + J_DSI_DISP — place near existing J_DISP
-   area (far left, top strip), select real connector parts matching both
-   datasheets, route per "DSI Pass-Through Connectors" section above
-   (differential pairs, length-matched, polarity-checked)
+8. **UPDATED (2026-06-19)**: J_DSI_NANO + J_DSI_DISP — place near existing J_DISP
+   area (far left, top strip). Pinout for both connectors now verified
+   against official Raspberry Pi CM4IO datasheet Figure 4 + P4-Nano's own
+   schematic (see "DSI Pass-Through Connectors" section — supersedes the
+   forum-screenshot-derived table that was wrong). **Before committing to
+   PCB traces**: physically verify pin 1 / contact-side orientation on the
+   hack breakout board first — this is the step that was skipped last time
+   and cost a full day. Schematic not yet updated with these connectors —
+   PCB placement paused until display bring-up (and breakout board
+   verification) is complete.
 
 ### After placement:
 - Routing: GND pour B.Cu, +12V_INT island F.Cu MagneRide zone
