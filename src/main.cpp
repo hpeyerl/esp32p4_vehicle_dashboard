@@ -30,6 +30,7 @@
 #include "gear_shifter.h"
 #include "units.h"
 #include "hat_pins.h"
+#include "gvret_server.h"
 
 #ifndef STRINGIFY
   #define STRINGIFY_(x) #x
@@ -66,10 +67,13 @@ static void can_rx_task(void *arg)
     twai_message_t msg;
     while (1) {
         if (twai_receive(&msg, pdMS_TO_TICKS(100)) == ESP_OK) {
+            int64_t ts_us = esp_timer_get_time();
             uint8_t data[8] = {};
             uint8_t dlc = msg.data_length_code < 8 ? msg.data_length_code : 8;
             memcpy(data, msg.data, dlc);
-            uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+            uint32_t now_ms = (uint32_t)(ts_us / 1000ULL);
+            // Forward to GVRET/SavvyCAN before any other processing
+            gvret_forward_frame(&msg, ts_us);
             // Feed SDO responses to SDO manager before dashboard parser
             sdo_process_frame(&msg);
             xSemaphoreTake(g_dash_mutex, portMAX_DELAY);
@@ -167,6 +171,7 @@ static void prv_bg_init_task(void *arg)
     // Runs after display and CAN are up — WiFi/OTA/SDO can be slow
     ota_server_start();
     sdo_manager_init(NULL, NULL);
+    gvret_server_start();
     ota_server_mark_valid();
     ESP_LOGI("bg_init", "background init complete");
     vTaskDelete(NULL);

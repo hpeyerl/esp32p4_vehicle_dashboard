@@ -21,6 +21,7 @@ idf_component_register(
         "status_page.c"
         "gear_shifter.c"
         "epb_controller.c"
+        "gvret_server.c"
     INCLUDE_DIRS "."
     REQUIRES
         esp_hosted
