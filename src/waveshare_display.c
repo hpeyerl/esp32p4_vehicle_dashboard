@@ -58,11 +58,9 @@ static const char *TAG = "ws_disp";
   // GT911 hard-reset GPIO sets I2C address:
   //   INT low  during reset → addr 0x5D
   //   INT high during reset → addr 0x14
-  // Set to -1 to skip hard reset (relies on power-on state).
-  #define WS_TOUCH_RST        24
-#endif
-#ifndef WS_LCD_RESET
-  #define WS_LCD_RESET        27
+  // Not wired on current hardware — skip hard reset (relies on power-on
+  // state / board-level strapping for the I2C address instead).
+  #define WS_TOUCH_RST        -1
 #endif
 #ifndef WS_BACKLIGHT_GPIO
   #define WS_BACKLIGHT_GPIO   22
@@ -279,29 +277,6 @@ static void prv_display_power_enable(void)
     ESP_LOGI(TAG, "display 5V rail enabled via GPIO%d", HAT_DISP_PWR_EN);
 }
 
-// ── LCD hardware reset ────────────────────────────────────────────────────
-static void prv_lcd_reset(void)
-{
-#if WS_LCD_RESET >= 0
-    gpio_config_t io_cfg = {
-        .pin_bit_mask = (1ULL << WS_LCD_RESET),
-        .mode         = GPIO_MODE_OUTPUT,
-        .pull_up_en   = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type    = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&io_cfg);
-    gpio_set_level((gpio_num_t)WS_LCD_RESET, 0);
-    vTaskDelay(pdMS_TO_TICKS(20));
-    gpio_set_level((gpio_num_t)WS_LCD_RESET, 1);
-    vTaskDelay(pdMS_TO_TICKS(120));
-    ESP_LOGI(TAG, "LCD reset via GPIO%d done", WS_LCD_RESET);
-#else
-    ESP_LOGW(TAG, "WS_LCD_RESET=-1, skipping hardware reset");
-    vTaskDelay(pdMS_TO_TICKS(50));
-#endif
-}
-
 // ── Backlight via LEDC PWM ────────────────────────────────────────────────
 static void prv_backlight_on(void)
 {
@@ -399,7 +374,10 @@ static esp_err_t prv_panel_init(void)
     };
 
     esp_lcd_panel_dev_config_t panel_cfg = {
-        .reset_gpio_num = -1,          // reset handled by prv_lcd_reset()
+        .reset_gpio_num = -1,          // no hardware reset line wired; panel
+                                       // relies on its own onboard POR plus
+                                       // the SWRESET DBI command (see
+                                       // panel_hx8399_reset() software path)
         .rgb_ele_order  = LCD_RGB_ELEMENT_ORDER_RGB,
         .data_endian    = LCD_RGB_DATA_ENDIAN_LITTLE,
         .bits_per_pixel = 16,
@@ -487,8 +465,19 @@ esp_err_t ws_display_init(lv_display_t **disp_out)
     ESP_LOGI(TAG, "init: I2C SDA=GPIO%d SCL=GPIO%d", WS_I2C_SDA, WS_I2C_SCL);
     if ((ret = prv_i2c_init()) != ESP_OK) return ret;
 
-    ESP_LOGI(TAG, "init: LCD reset GPIO%d", WS_LCD_RESET);
-    prv_lcd_reset();
+    // Touch init runs BEFORE the DSI panel sequence, deliberately. It's
+    // electrically independent of DSI entirely (separate pins, separate
+    // I2C protocol), and esp_lcd_touch_new_i2c_gt911() logs the GT911's
+    // product ID register read (TouchPad_ID:...) as part of its normal
+    // init flow. That gives us a clean, independent signal that the
+    // display is powered and alive even if the DSI link below hangs.
+    // Non-fatal: a missing/failed touch controller shouldn't prevent the
+    // panel from displaying graphics, and (for bring-up) shouldn't block
+    // us from finding out whether the DSI sequence below succeeds or not.
+    ESP_LOGI(TAG, "init: GT911 touch");
+    if ((ret = prv_touch_init()) != ESP_OK) {
+        ESP_LOGW(TAG, "GT911 touch init failed (0x%x) — continuing without touch", ret);
+    }
 
     ESP_LOGI(TAG, "init: backlight GPIO%d", WS_BACKLIGHT_GPIO);
     prv_backlight_on();
@@ -496,9 +485,6 @@ esp_err_t ws_display_init(lv_display_t **disp_out)
     ESP_LOGI(TAG, "init: HX8399-C  %d lanes  %d Mbps  %d MHz DPI",
              WS_DSI_LANE_NUM, WS_DSI_LANE_MBPS, WS_DPI_CLK_MHZ);
     if ((ret = prv_panel_init()) != ESP_OK) return ret;
-
-    ESP_LOGI(TAG, "init: GT911 touch");
-    if ((ret = prv_touch_init()) != ESP_OK) return ret;
 
     lv_display_t *disp = lv_display_create(LCD_H_RES, LCD_V_RES);
     lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565);
