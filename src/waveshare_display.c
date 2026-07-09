@@ -24,6 +24,8 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_mipi_dsi.h"
 #include "esp_lcd_touch.h"
+#include "esp_ldo_regulator.h"
+#include "hal/axi_icm_ll.h"
 #include "driver/i2c_master.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
@@ -31,6 +33,7 @@
 #include "freertos/task.h"
 #include "driver/ppa.h"
 #include "esp_cache.h"
+#include "hat_pins.h"
 #include <string.h>
 
 // HX8399 panel driver — espressif/esp_lcd_hx8399 from ESP Component Registry
@@ -55,11 +58,9 @@ static const char *TAG = "ws_disp";
   // GT911 hard-reset GPIO sets I2C address:
   //   INT low  during reset → addr 0x5D
   //   INT high during reset → addr 0x14
-  // Set to -1 to skip hard reset (relies on power-on state).
-  #define WS_TOUCH_RST        24
-#endif
-#ifndef WS_LCD_RESET
-  #define WS_LCD_RESET        27
+  // Not wired on current hardware — skip hard reset (relies on power-on
+  // state / board-level strapping for the I2C address instead).
+  #define WS_TOUCH_RST        -1
 #endif
 #ifndef WS_BACKLIGHT_GPIO
   #define WS_BACKLIGHT_GPIO   22
@@ -88,11 +89,18 @@ static const char *TAG = "ws_disp";
 #define WS_PANEL_H  720
 #define WS_PANEL_V  1920
 
+// VDD_MIPI_DPHY is hardwired to internal LDO channel 3 on ESP32-P4 (SoC-level,
+// not board-specific). Without powering this rail, the DSI PHY PLL never
+// locks and esp_lcd_new_dsi_bus() hangs forever in its lock-wait loop.
+#define WS_DSI_PHY_LDO_CHAN     3
+#define WS_DSI_PHY_LDO_MV       2500
+
 // ── Module-private handles ────────────────────────────────────────────────
 static esp_lcd_panel_handle_t   s_panel   = NULL;
 static esp_lcd_touch_handle_t   s_touch   = NULL;
 static i2c_master_bus_handle_t  s_i2c     = NULL;
 static esp_lcd_dsi_bus_handle_t s_dsi_bus = NULL;
+static esp_ldo_channel_handle_t s_dsi_phy_ldo = NULL;
 static ppa_client_handle_t      s_ppa     = NULL;
 static void                    *s_rot_buf = NULL;
 
@@ -161,8 +169,17 @@ static const hx8399_lcd_init_cmd_t s_hx8399_init_cmds[] = {
     {0xCC, (uint8_t[]){0x08},                                            1,   0},
     // SETOFFSET
     {0xC6, (uint8_t[]){0xFF, 0xF9},                                      2,   0},
-    // NOTE: Sleep out (0x11) and Display on (0x29) are sent by the
-    // esp_lcd_hx8399 component in panel_hx8399_init(). Do not duplicate here.
+    // NOTE: Sleep out (0x11) is sent by the esp_lcd_hx8399 component before
+    // this array runs. Display ON (0x29) is sent HERE, not via the later
+    // esp_lcd_panel_disp_on_off() call — panel_hx8399_init() calls
+    // hx8399->init(panel) (which starts the DPI video stream) immediately
+    // after this array finishes. Once video streaming begins, this board's
+    // DSI host never reopens a command-FIFO window for further DBI commands,
+    // so disp_on_off() hangs forever (ESP-IDF's mipi_dsi_hal_host_gen_write_dcs_command
+    // has an unconditional, timeout-free spin-wait). Sending DISPON before
+    // hx8399->init(panel) avoids the problem entirely.
+    {0xB9, (uint8_t[]){0x00},                                            1,   0},   // close manufacturer page
+    {0x29, NULL,                                                         0,  10},   // Display ON
 };
 
 // ── LVGL flush callback ───────────────────────────────────────────────────
@@ -240,27 +257,24 @@ static void prv_lvgl_touch_cb(lv_indev_t *indev, lv_indev_data_t *data)
     }
 }
 
-// ── LCD hardware reset ────────────────────────────────────────────────────
-static void prv_lcd_reset(void)
+// ── Display 5V rail enable (HAT LM2596S-5, ON/OFF gated by GPIO4) ─────────
+// Active-low: drive LOW to enable. 10k pull-up on the HAT (R_5V_EN1, net
+// 5V0_ENABLE) defaults this to disabled/HIGH if firmware never configures
+// it, so the display stays unpowered (and can't backfeed ESP_3V3 via the
+// DSI cable) until we explicitly turn it on here, first thing.
+static void prv_display_power_enable(void)
 {
-#if WS_LCD_RESET >= 0
     gpio_config_t io_cfg = {
-        .pin_bit_mask = (1ULL << WS_LCD_RESET),
+        .pin_bit_mask = (1ULL << HAT_DISP_PWR_EN),
         .mode         = GPIO_MODE_OUTPUT,
         .pull_up_en   = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type    = GPIO_INTR_DISABLE,
     };
     gpio_config(&io_cfg);
-    gpio_set_level((gpio_num_t)WS_LCD_RESET, 0);
-    vTaskDelay(pdMS_TO_TICKS(20));
-    gpio_set_level((gpio_num_t)WS_LCD_RESET, 1);
-    vTaskDelay(pdMS_TO_TICKS(120));
-    ESP_LOGI(TAG, "LCD reset via GPIO%d done", WS_LCD_RESET);
-#else
-    ESP_LOGW(TAG, "WS_LCD_RESET=-1, skipping hardware reset");
-    vTaskDelay(pdMS_TO_TICKS(50));
-#endif
+    gpio_set_level(HAT_DISP_PWR_EN, 0);   // enable LM2596S-5 5V output
+    vTaskDelay(pdMS_TO_TICKS(50));        // let the display's onboard rails settle
+    ESP_LOGI(TAG, "display 5V rail enabled via GPIO%d", HAT_DISP_PWR_EN);
 }
 
 // ── Backlight via LEDC PWM ────────────────────────────────────────────────
@@ -305,6 +319,24 @@ static esp_err_t prv_i2c_init(void)
 // ── HX8399-C DSI panel init ───────────────────────────────────────────────
 static esp_err_t prv_panel_init(void)
 {
+    // Power VDD_MIPI_DPHY before touching the DSI bus — see WS_DSI_PHY_LDO_CHAN comment.
+    esp_ldo_channel_config_t ldo_cfg = {
+        .chan_id    = WS_DSI_PHY_LDO_CHAN,
+        .voltage_mv = WS_DSI_PHY_LDO_MV,
+    };
+    ESP_RETURN_ON_ERROR(esp_ldo_acquire_channel(&ldo_cfg, &s_dsi_phy_ldo),
+                        TAG, "DSI PHY LDO power-on failed");
+
+    // Boost AXI arbiter priority for both DW-GDMA master ports to max (15).
+    // The DSI bridge's frame-buffer-fetch DMA runs on one of these; at default
+    // priority (0, tied with CPU/cache) it loses arbitration for PSRAM access
+    // under load and underruns ("can't fetch data from external memory fast
+    // enough"). Underrun itself self-recovers, but the FOLLOWING disp_on_off()
+    // DCS command then blocks forever in an unguarded HAL spin-wait, killing
+    // the watchdog. Raising DMA priority prevents the underrun in the first place.
+    axi_icm_ll_set_dw_gdma_qos_arbiter_prio(0, 15, 15);
+    axi_icm_ll_set_dw_gdma_qos_arbiter_prio(1, 15, 15);
+
     // DSI bus — 2 lanes at 950 Mbps each (P4-Nano hardware limit)
     esp_lcd_dsi_bus_config_t bus_cfg = {
         .bus_id             = 0,
@@ -342,7 +374,10 @@ static esp_err_t prv_panel_init(void)
     };
 
     esp_lcd_panel_dev_config_t panel_cfg = {
-        .reset_gpio_num = -1,          // reset handled by prv_lcd_reset()
+        .reset_gpio_num = -1,          // no hardware reset line wired; panel
+                                       // relies on its own onboard POR plus
+                                       // the SWRESET DBI command (see
+                                       // panel_hx8399_reset() software path)
         .rgb_ele_order  = LCD_RGB_ELEMENT_ORDER_RGB,
         .data_endian    = LCD_RGB_DATA_ENDIAN_LITTLE,
         .bits_per_pixel = 16,
@@ -365,8 +400,9 @@ static esp_err_t prv_panel_init(void)
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_hx8399(io, &panel_cfg, &s_panel),
                         TAG, "HX8399 panel create failed");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(s_panel), TAG, "Panel reset failed");
+    // Display ON is sent from inside s_hx8399_init_cmds (before video streaming
+    // starts) — see comment there. Do NOT call esp_lcd_panel_disp_on_off() here.
     ESP_RETURN_ON_ERROR(esp_lcd_panel_init(s_panel),  TAG, "Panel init failed");
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_disp_on_off(s_panel, true), TAG, "Disp on failed");
 
     // PPA SRM for hardware rotation in flush cb
     ppa_client_config_t ppa_cfg = { .oper_type = PPA_OPERATION_SRM };
@@ -423,11 +459,25 @@ esp_err_t ws_display_init(lv_display_t **disp_out)
 {
     esp_err_t ret;
 
+    ESP_LOGI(TAG, "init: display 5V rail enable GPIO%d", HAT_DISP_PWR_EN);
+    prv_display_power_enable();
+
     ESP_LOGI(TAG, "init: I2C SDA=GPIO%d SCL=GPIO%d", WS_I2C_SDA, WS_I2C_SCL);
     if ((ret = prv_i2c_init()) != ESP_OK) return ret;
 
-    ESP_LOGI(TAG, "init: LCD reset GPIO%d", WS_LCD_RESET);
-    prv_lcd_reset();
+    // Touch init runs BEFORE the DSI panel sequence, deliberately. It's
+    // electrically independent of DSI entirely (separate pins, separate
+    // I2C protocol), and esp_lcd_touch_new_i2c_gt911() logs the GT911's
+    // product ID register read (TouchPad_ID:...) as part of its normal
+    // init flow. That gives us a clean, independent signal that the
+    // display is powered and alive even if the DSI link below hangs.
+    // Non-fatal: a missing/failed touch controller shouldn't prevent the
+    // panel from displaying graphics, and (for bring-up) shouldn't block
+    // us from finding out whether the DSI sequence below succeeds or not.
+    ESP_LOGI(TAG, "init: GT911 touch");
+    if ((ret = prv_touch_init()) != ESP_OK) {
+        ESP_LOGW(TAG, "GT911 touch init failed (0x%x) — continuing without touch", ret);
+    }
 
     ESP_LOGI(TAG, "init: backlight GPIO%d", WS_BACKLIGHT_GPIO);
     prv_backlight_on();
@@ -435,9 +485,6 @@ esp_err_t ws_display_init(lv_display_t **disp_out)
     ESP_LOGI(TAG, "init: HX8399-C  %d lanes  %d Mbps  %d MHz DPI",
              WS_DSI_LANE_NUM, WS_DSI_LANE_MBPS, WS_DPI_CLK_MHZ);
     if ((ret = prv_panel_init()) != ESP_OK) return ret;
-
-    ESP_LOGI(TAG, "init: GT911 touch");
-    if ((ret = prv_touch_init()) != ESP_OK) return ret;
 
     lv_display_t *disp = lv_display_create(LCD_H_RES, LCD_V_RES);
     lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565);

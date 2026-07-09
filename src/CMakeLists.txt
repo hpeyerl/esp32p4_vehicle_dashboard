@@ -38,4 +38,6 @@ idf_component_register(
         esp_timer
         esp_psram
         lvgl__lvgl
+        hal
+        soc
 )
