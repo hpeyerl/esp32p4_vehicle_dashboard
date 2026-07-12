@@ -310,6 +310,34 @@ static void prv_lvgl_flush_cb(lv_display_t *disp,
         static int flush_count = 0;
         flush_count++;
         ESP_LOGD(TAG, "flush_cb call #%d", flush_count);
+#ifdef DSI_TIGHT_POLL_TEST
+        // TEMPORARY 2026-07-13: ESP32-P4 TRM 42.4.3.1.4 confirms LP-11/
+        // stopstate IS the normal resting state between transactions —
+        // "any request must start from and end in this state." Our
+        // register polling all session has been every 10-80ms; if real
+        // HS bursts genuinely happen but are brief relative to that
+        // interval, we'd almost always sample back at idle and wrongly
+        // conclude "never bursts". Testing with a tight, no-delay loop —
+        // thousands of back-to-back reads, no vTaskDelay at all — right
+        // after a real draw_bitmap() call, to see if we ever catch even
+        // one non-stopstate/non-empty sample that slower polling missed.
+        if (flush_count == 5) {
+            uint32_t burst_seen = 0, full_seen = 0;
+            uint32_t sample_count = 100000;
+            for (uint32_t i = 0; i < sample_count; i++) {
+                uint32_t phy = MIPI_DSI_HOST.phy_status.val;
+                uint32_t vid = MIPI_DSI_HOST.vid_pkt_status.val;
+                if (((phy >> 2) & 1) == 0 || ((phy >> 4) & 1) == 0 || ((phy >> 7) & 1) == 0) {
+                    burst_seen++;
+                }
+                if (((vid >> 17) & 1) == 1) {  // dpi_buff_pld_full
+                    full_seen++;
+                }
+            }
+            ESP_LOGW(TAG, "DSI_TIGHT_POLL: %lu samples, burst_seen=%lu times, buffer_full_seen=%lu times",
+                     (unsigned long)sample_count, (unsigned long)burst_seen, (unsigned long)full_seen);
+        }
+#endif
         if (flush_count <= 30) {
             uint32_t phy = MIPI_DSI_HOST.phy_status.val;
             uint32_t vid = MIPI_DSI_HOST.vid_pkt_status.val;

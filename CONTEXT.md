@@ -2296,6 +2296,82 @@ has been tried, tested, and ruled out or confirmed correct.
 **Repo state**: `DSI_BRIDGE_STATUS_TEST` build flag added to
 `[env:waveshare_debug_usb]`, diagnostic code left in place in
 `waveshare_display.c` (register dump + `mem_clk_ctrl` force-on test +
-dedicated bridge ISR allocation) for reuse in a future session. Not yet
-committed — sitting as uncommitted changes on `gvret` pending user
-review.
+dedicated bridge ISR allocation) for reuse in a future session.
+Committed as `d62694c`.
+
+## 2026-07-13 (continued): downloaded the actual ESP32-P4 TRM — three more theories checked and ruled out, one measurement-methodology question definitively closed
+
+User correctly pointed out that everything read so far (`soc/*_struct.h`
+header comments) is ESP-IDF's auto-generated register descriptions, not
+Espressif's actual Technical Reference Manual — and asked whether any
+of this related to the HX8399-C (it doesn't; confirmed the entire
+investigation is host-side, the panel is proven healthy via LP-mode
+reads and its own datasheet, already fully leveraged). Downloaded the
+real TRM (`documentation.espressif.com/esp32-p4_technical_reference_
+manual_en.pdf`, saved to scratchpad, `pdftotext -layout` extracted for
+searching) and found Chapter 42 "MIPI DSI" has a genuine "Programming
+Procedures" section (42.6) with real usage-sequence narrative, not just
+bit-field descriptions. Checked three concrete new leads from it:
+
+1. **42.6.3 "Release global reset" — the very first documented step of
+   DSI Host bring-up.** Found a genuine, separate system-level reset
+   control (`HP_SYS_CLKRST_RST_EN_DSI_BRG`, TRM confirms 0=released/
+   1=held-in-reset) distinct from anything we'd checked in the DSI
+   Bridge's own register block all session. Traced the actual release
+   call (`mipi_dsi_ll_reset_register()` in `hal/esp32p4/include/hal/
+   mipi_dsi_ll.h`, a clean assert-then-immediately-release pulse) and
+   confirmed it IS called, early, in `esp_lcd_new_dsi_bus()`
+   (`esp_lcd_mipi_dsi_bus.c:43`) — which we know runs first in our own
+   `prv_panel_init()`. Ruled out.
+
+2. **42.6.2/Table 42.4-4 "hsfreqrange" D-PHY frequency-range selection**
+   — our 1500Mbps lane rate sits at the very top edge of the lookup
+   table (1450-1500 → `hsfreqrange=111100`/decimal 60), a plausible
+   off-by-one/boundary bug candidate. Checked `mipi_dsi_hal.c`'s actual
+   selection code — a proper table-driven lookup with inclusive
+   `start_mbps`/`end_mbps` bounds, not hand-rolled boundary math.
+   Confirmed via an ALREADY-CAPTURED debug log line from earlier
+   tonight (`HAL_LOGD("dsi_hal", "phy pll: ...")`, present in this
+   build because it already runs at debug log level): our actual
+   selected value was `hsfreqrange=60` — exactly matching the TRM's
+   documented `111100` for 1450-1500Mbps. Also confirmed the PLL M/N
+   math (`M=150, N=2`) computes to a mathematically exact 1500Mbps
+   (`f_vco = M/N × f_ref = 150/2 × 20MHz = 1500MHz`, zero rounding
+   error). Both ruled out — this calculation is correct.
+
+3. **Measurement methodology — definitively closed, not just
+   theorized.** TRM section 42.4.3.1.4 ("Control Mode") explicitly
+   confirms LP-11/stopstate is the *normal resting state between
+   transactions* — "the MIPI BD D-PHY remains in Control mode by
+   default while driving the stop state LP-11 on the lines until a
+   request is made. Any request must start from and end in this
+   state." This directly validates a concern the user raised: if real
+   HS bursts happen but are brief relative to our ~10-80ms polling
+   interval, slow sampling would almost always catch the lines back at
+   idle and wrongly read "always stuck" as "never even tries." Tested
+   this directly and conclusively: added a tight, zero-delay polling
+   loop (`DSI_TIGHT_POLL_TEST` build flag) — 100,000 back-to-back
+   `phy_status`/`vid_pkt_status` reads, no `vTaskDelay` at all, fired
+   right after a real `draw_bitmap()` call during active rendering.
+   **Result: 0 out of 100,000 samples showed any burst activity or
+   buffer-full state.** This rules out polling granularity as an
+   explanation — not a measurement artifact, the PHY genuinely never
+   attempts a single HS burst during real rendering, confirmed at a
+   sampling density that would have caught even a very brief,
+   legitimate burst with high probability.
+
+**Where this leaves things**: every concrete, checkable theory
+generated from the actual Espressif TRM (not just header-comment
+guesswork) has now been tested and ruled out or confirmed correct:
+global reset (released correctly), D-PHY frequency range and PLL math
+(exactly correct), and the measurement methodology itself (confirmed
+sound via tight polling, not an artifact of slow sampling). Combined
+with the prior session's exhaustive bridge-register-configuration
+sweep (all correct), this is now about as complete a software-side
+case as can be built from public documentation. The TRM is saved
+locally (`/tmp/.../scratchpad/esp32p4_trm.pdf` and `.txt` — NOTE:
+scratchpad is session-scoped/ephemeral, re-download if starting a new
+session and this becomes relevant again) and worth searching further
+for anything genuinely missed (haven't yet read the full D-PHY
+initialization chapter narrative end-to-end, only the specific
+sections these three hypotheses pointed at) if picking this back up.
