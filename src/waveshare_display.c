@@ -950,6 +950,44 @@ static esp_err_t prv_panel_init(void)
                  (unsigned long)MIPI_DSI_BRIDGE.int_ena.val,
                  (unsigned long)MIPI_DSI_BRIDGE.dma_req_cfg.val);
 
+        // TEST 2026-07-13 (continued): dma_frame_interval is a bridge
+        // register never dumped before and never written by our driver
+        // (ESP-IDF 5.4.2's dpi_panel_init() only ever writes
+        // dma_flow_multiblk_num/dma_multiblk_en via
+        // mipi_dsi_brg_ll_set_multi_block_number(), which for us passes
+        // DPI_PANEL_MIN_DMA_NODES_PER_LINK=1, meaning multiblk_en resolves
+        // to 0/disabled — the sibling dma_frame_interval_en bit in the
+        // SAME register is left at its power-on-reset default of 1
+        // ("enable interval between frame transfer"), with frame_slot and
+        // frame_interval counters both defaulting to 9. Description reads
+        // as a pacing/throttle gate between successive DMA frame starts,
+        // unrelated to the (disabled) multiblock-within-a-frame feature.
+        // Dumping it, then forcing frame_interval_en=0 to remove any
+        // possible inter-frame pacing gate as a variable, consistent with
+        // the same targeted-register-write methodology already used for
+        // mem_clk_ctrl/lpclk_ctrl above.
+        //
+        // RESULT 2026-07-13: forcing frame_interval_en=0 produced ZERO
+        // change across a 17-flush real-rendering capture — vid_pkt_status
+        // stayed frozen at 0x00010005 and d0stop/d1stop stayed 1 the whole
+        // time, identical to every prior capture. Ruled out. Also cross-
+        // checked pixel format consistency while here: pixel_type.raw_type
+        // reads 2 (RGB565) and raw_num_cfg.raw_num_total reads 345600,
+        // which is exactly 720*1920*16/64 — self-consistent with our own
+        // driver's LCD_COLOR_PIXEL_FORMAT_RGB565/bits_per_pixel=16 config.
+        // No bpp mismatch. Left in (harmless, real hardware-verified
+        // finding) for the same reason as the lpclk_ctrl force below.
+        uint32_t frame_iv_before = MIPI_DSI_BRIDGE.dma_frame_interval.val;
+        ESP_LOGW(TAG, "DSI_BRIDGE dma_frame_interval=0x%lX(slot=%lu interval=%lu multiblk_en=%lu interval_en=%lu)",
+                 (unsigned long)frame_iv_before,
+                 (unsigned long)(frame_iv_before & 0x3FF),
+                 (unsigned long)((frame_iv_before >> 10) & 0x3FFFF),
+                 (unsigned long)((frame_iv_before >> 28) & 1),
+                 (unsigned long)((frame_iv_before >> 29) & 1));
+        MIPI_DSI_BRIDGE.dma_frame_interval.dma_frame_interval_en = 0;
+        ESP_LOGW(TAG, "DSI_BRIDGE: dma_frame_interval_en forced to 0, now=0x%lX",
+                 (unsigned long)MIPI_DSI_BRIDGE.dma_frame_interval.val);
+
         // Install a real, dedicated CPU-level interrupt handler for the
         // bridge's own IRQ line — see prv_dsi_bridge_isr() comment above.
         intr_handle_t brg_intr = NULL;

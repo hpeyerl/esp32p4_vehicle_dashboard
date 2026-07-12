@@ -2460,3 +2460,106 @@ future session that might find the actual bridge-handoff fix and want
 to test combinations. Not committed yet — sitting as uncommitted
 changes on `gvret` (the `HX8399_SELFTEST_RETRIGGER` panel self-test
 re-check and this forced-clock-lane test) pending review.
+
+**2026-07-13 (continued, per user's "do the slow methodical TRM work,
+don't need me, checking in occasionally"): three more candidate
+mechanisms checked and ruled out, all with concrete evidence, closing
+off the DMA/bridge-FIFO-ingestion side of the investigation.**
+
+1. **DW-GDMA handshake/flow-controller/peripheral-role configuration**
+   (`dw_gdma.c` `dw_gdma_ll_channel_set_trans_flow()`,
+   `..._set_src/dst_handshake_interface()`,
+   `..._set_src/dst_handshake_periph()`, called from
+   `esp_lcd_panel_dpi.c`'s `dpi_panel_init()`/channel-alloc code). This
+   looked promising — a genuine hardware handshake between the DMA
+   engine and its destination peripheral, in the *correct* subsystem
+   (DW-GDMA, distinct from the unrelated Chapter 6 "VDMA Controller"
+   briefly suspected earlier). Traced the actual values: `.dst.role =
+   DW_GDMA_ROLE_PERIPH_DSI`, `.dst.handshake_type =
+   DW_GDMA_HANDSHAKE_HW`, mapped via the LL header's `switch` statement
+   to `DW_GDMA_LL_HW_HANDSHAKE_PERIPH_DSI` — a real, chip-specific,
+   correctly-selected hardware handshake ID (not a generic/wrong
+   default). All stock, unmodified ESP-IDF vendor code. Ruled out.
+
+2. **Bridge flow-controller mode and multi-block consistency**
+   (`dma_flow_ctrl` register: `dsi_dma_flow_controller` bit, hardware
+   reset default is 1/bridge-as-controller, but our driver explicitly
+   writes `MIPI_DSI_LL_FLOW_CONTROLLER_DMA` = enum 0, correctly mapped,
+   overriding the default intentionally — not an inversion bug).
+   `dma_flow_multiblk_num` is set from
+   `DPI_PANEL_MIN_DMA_NODES_PER_LINK` (=1, "we assume 1 DMA link item
+   can carry the WHOLE image" — our whole framebuffer fits one
+   descriptor), which correctly resolves `dma_multiblk_en=0`
+   (single-block transfer, matches our real DMA link-list setup
+   exactly — same source constant used in both places, no room for a
+   mismatch). Ruled out.
+
+3. **`dma_frame_interval` register — genuinely new, never dumped in any
+   prior session.** Bridge register with `dma_frame_slot`/
+   `dma_frame_interval` counters (both reset default 9) and a
+   `dma_frame_interval_en` bit (reset default 1, "enable interval
+   between frame transfer") that our driver never touches — left at
+   hardware defaults. Distinct from the (correctly disabled)
+   multi-block-within-a-frame feature; this looked like a plausible
+   inter-frame pacing/throttle gate that could, in principle, hold up
+   a first-frame-ready signal indefinitely. **Tested empirically on
+   real hardware**: added a register dump plus a forced
+   `dma_frame_interval_en=0` write to `DSI_BRIDGE_STATUS_TEST`,
+   rebuilt, flashed, captured 17 real-rendering flush cycles.  Before:
+   `dma_frame_interval=0x20002409` (slot=9 interval=9 multiblk_en=0
+   interval_en=1). After forcing en=0: zero observable change —
+   `vid_pkt_status` frozen at `0x00010005` across all 17 flushes,
+   `d0stop=1 d1stop=1` the entire capture, identical to every prior
+   session's baseline. Ruled out.
+
+4. **Cross-checked pixel format/bpp consistency** across three
+   independent configuration points while investigating (3): our own
+   driver (`LCD_COLOR_PIXEL_FORMAT_RGB565`, `bits_per_pixel=16`), the
+   bridge's `pixel_type.raw_type` (live-read as 2 = RGB565, confirmed
+   via the struct header's own documented enum: 0=rgb888, 1=rgb666,
+   2=rgb565), and `raw_num_cfg.raw_num_total` (live-read as 345600,
+   which is exactly `720*1920*16/64` — the correct RGB565 pixel-bit
+   count for our resolution). All three agree exactly. No bpp
+   mismatch anywhere in the chain. Ruled out.
+
+5. **Followed up on `pixel_type.dpi_config` (bitpos [5:4], "pixel
+   arrange type of dpi interface"), the one field left un-cross-
+   referenced.** Initially looked alarming: grepping only
+   `esp_lcd/dsi/*.c` for the setter function name
+   (`mipi_dsi_brg_ll_set_pixel_format`) found zero callers, suggesting
+   dead code — i.e. that `pixel_type` might be sitting at an
+   unconfigured hardware-reset value. Widened the search to the whole
+   framework tree and found the real call site: the setter is invoked
+   through a HAL wrapper with a different name,
+   `mipi_dsi_hal_host_dpi_set_color_coding()` (in `hal/mipi_dsi_hal.c`,
+   called from `esp_lcd_panel_dpi.c` line 284 as
+   `mipi_dsi_hal_host_dpi_set_color_coding(hal, out_color_format, 0)`)
+   — so it's genuinely, deliberately called, not dead code. `sub_config`
+   is hardcoded to 0, which is correct: per TRM Table 42.4-1 ("Input
+   Pixel Arrangement"), RGB565 is a single well-defined 16-bit packing
+   with no sub-format ambiguity (unlike RGB666, which has loose/tight
+   packing variants that would need a non-zero sub_config). Confirmed
+   correct, not a bug.
+
+**Where this leaves things**: the entire DMA-ingestion side (GDMA
+channel roles/handshake, bridge flow-controller mode, multi-block
+config, frame-pacing gate) AND the entire pixel-format/output-config
+side (`pixel_type.raw_type`, `.dpi_config`, `raw_num_cfg`) of the
+bridge register space has now been checked and is confirmed correct,
+self-consistent, and — where tested live (`dma_frame_interval_en`) —
+empirically inert. All stock vendor code, no inversion bugs, no
+mismatched constants, no dead/unconfigured registers masquerading as
+configured ones. Combined with everything already ruled out in the
+DSI Host/PHY/timing/reset/PLL space earlier this session, register-
+level TRM archaeology on the ESP-IDF 5.4.2 driver as given appears to
+be genuinely exhausted — every register this session could find that
+plausibly relates to the Bridge→Host data handoff has been read,
+decoded, and (where a test was possible) tried. The remaining
+avenues are the ones already on the table from earlier in the day:
+the electrical/scope layer, or actually getting ESP-IDF 5.5.4+
+running (the officially-documented minimum version, previously
+attempted and parked on `esp-idf-5.5-upgrade` after hitting build
+system issues). Diagnostic code for this session's additions
+(dma_frame_interval dump+force) is added to `waveshare_display.c`
+under the existing `DSI_BRIDGE_STATUS_TEST` guard, harmless (zero
+crashes, zero underrun observed), not yet committed.
