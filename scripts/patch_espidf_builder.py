@@ -242,12 +242,18 @@ except Exception as e:
 # TCM being registered in the heap allocator's own capability table with
 # MALLOC_CAP_INTERNAL — components/heap/port/esp32p4/memory_layout.c).
 # TCM genuinely is valid, always-accessible on-chip memory; this is a
-# real ESP-IDF gap for this chip, not a workaround. Fixing
-# esp_ptr_byte_accessible() (the function actually in the active check
-# path) — NOT esp_ptr_internal() (tried first, turned out to be dead
-# code under our ALLOW_EXT_MEM config, left unpatched to keep this
-# minimal). Verified: 5/5 clean boots at 200MHz with this patch, 0/5
-# without it.
+# real ESP-IDF gap for this chip, not a workaround.
+#
+# CORRECTION (same day): originally thought esp_ptr_internal() was dead
+# code here and left it unpatched — true for xPortcheckValidStackMem()
+# (which has the ALLOW_EXT_MEM bypass), but xPortCheckValidTCBMem() (the
+# sibling check for the idle task's TCB, not stack, buffer) has NO such
+# bypass — it unconditionally requires esp_ptr_internal(ptr) too. Hit
+# this directly: after this patch alone, got a DIFFERENT crash
+# (xPortCheckValidTCBMem instead of xPortcheckValidStackMem) — same TCM
+# root cause, different one of the two buffers landing there. Both
+# functions need the fix; see the esp_memory_utils.h patch immediately
+# below for the esp_ptr_internal() half.
 try:
     mem_utils = os.path.join(
         os.path.expanduser("~/.platformio"), "packages", "framework-espidf",
@@ -276,3 +282,38 @@ try:
         print("[patch_espidf] esp_memory_utils.c not found at expected path — skipping (not an error, may not be installed yet)")
 except Exception as e:
     print(f"[patch_espidf] esp_memory_utils.c patch failed: {e}")
+
+# ── Patch esp_memory_utils.h: teach esp_ptr_internal() about TCM too ─────────
+# 2026-07-13 (companion to the esp_ptr_byte_accessible patch above, added
+# after discovering the byte_accessible fix alone was incomplete): the
+# idle task's TCB buffer (checked via xPortCheckValidTCBMem, which has no
+# ALLOW_EXT_MEM bypass, unlike the stack check) requires esp_ptr_internal()
+# to also recognize TCM. Same gap, same fix pattern, different function.
+try:
+    mem_utils_h = os.path.join(
+        os.path.expanduser("~/.platformio"), "packages", "framework-espidf",
+        "components", "esp_hw_support", "include", "esp_memory_utils.h"
+    )
+    if os.path.exists(mem_utils_h):
+        with open(mem_utils_h, 'r') as f:
+            content = f.read()
+        marker = "// [patched 2026-07-13] esp_ptr_internal TCM fix (vehicle-dashboard)"
+        if marker in content:
+            print("[patch_espidf] esp_memory_utils.h already patched (TCM internal fix)")
+        else:
+            old = "    r = ((intptr_t)p >= SOC_MEM_INTERNAL_LOW && (intptr_t)p < SOC_MEM_INTERNAL_HIGH);"
+            new = (old + "\n\n"
+                   "    " + marker + "\n"
+                   "#if SOC_MEM_TCM_SUPPORTED\n"
+                   "    r |= esp_ptr_in_tcm(p);\n"
+                   "#endif")
+            if old not in content:
+                raise RuntimeError("esp_ptr_internal anchor not found")
+            content = content.replace(old, new, 1)
+            with open(mem_utils_h, 'w') as f:
+                f.write(content)
+            print("[patch_espidf] patched esp_memory_utils.h — esp_ptr_internal() now recognizes TCM")
+    else:
+        print("[patch_espidf] esp_memory_utils.h not found at expected path — skipping (not an error, may not be installed yet)")
+except Exception as e:
+    print(f"[patch_espidf] esp_memory_utils.h patch failed: {e}")
