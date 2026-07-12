@@ -2375,3 +2375,88 @@ session and this becomes relevant again) and worth searching further
 for anything genuinely missed (haven't yet read the full D-PHY
 initialization chapter narrative end-to-end, only the specific
 sections these three hypotheses pointed at) if picking this back up.
+
+## 2026-07-13 (continued, per user's explicit go-ahead to keep doing methodical TRM work solo): one real behavioral change found — clock lane forced to continuous HS — but doesn't complete the fix; root cause narrowed to the exact TRM-documented handoff mechanism
+
+Continued reading the TRM systematically rather than stopping. Checked
+three more things:
+
+1. **PLL loop-filter/charge-pump parameters (42.4.3.2, test codes
+   0x10/0x11/0x12 — vcorange/icpctrl/lpfctrl)**: confirmed our driver
+   never touches these at all (`grep` for 0x10/0x11/0x12 in
+   `mipi_dsi_hal.c` — no matches). Per the TRM, these auto-default based
+   on `hsfreqrange` when left untouched. **Ruled out by a logic shortcut,
+   not more register-reading**: since the pattern generator successfully
+   bursts at the exact same PLL/PHY/hsfreqrange configuration our real
+   rendering uses, the PLL tuning is already empirically proven adequate
+   — whatever "automatic" values are in effect are good enough, because
+   we've seen real HS output at this exact frequency. This also
+   reframes the whole investigation usefully: since PLL/PHY config is
+   *identical* between the working pattern-generator path and the
+   broken real-rendering path, the differentiator must be specifically
+   in how bridge-sourced data reaches the transmit pipeline, not in PHY
+   calibration at all.
+
+2. **Burst vs Non-Burst video transmission mode (42.4.2.1)**: TRM warns
+   the wrong mode selection "may [cause] pixel data to be lost, causing
+   malfunction of the display peripheral" — a precise-sounding match to
+   our symptom. Checked the actual enum
+   (`mipi_dsi_ll_video_burst_type_t`) and confirmed
+   `MIPI_DSI_LL_VIDEO_BURST_WITH_SYNC_PULSES` (what our driver selects)
+   really is genuine Burst Mode, not a confusingly-named Non-Burst
+   variant as the naming briefly suggested. Burst Mode is also the
+   TRM's own recommended choice given our bandwidth margins (1500Mbps
+   lane rate vs. ~585Mbps/lane minimum needed). Ruled out.
+
+3. **42.4.3.1.5 "High-Speed Data Transfer" — direct TRM confirmation of
+   the exact mechanism, matching this session's own independent
+   localization.** Verbatim: "DSI HOST sends a request for High-Speed
+   Data Transfer **after receiving data from DSI Bridge**." This is
+   authoritative confirmation (not inference from register comments)
+   that the Host does not autonomously decide to burst — it waits for
+   the Bridge to hand data over, and only then requests HS transfer.
+   Given everything already proven (bridge's raw buffer genuinely
+   filling with real pixel data; Host correctly, blamelessly waiting
+   for a handoff that never completes), this is exactly consistent with
+   the whole night's findings, from the TRM's own authoritative
+   language rather than our own inference.
+
+**Found one genuine, reproducible behavioral change while investigating
+the clock-lane state machine (42.4.3.1.5, `lpclk_ctrl` register).** Our
+driver sets the clock lane to `MIPI_DSI_LL_CLOCK_LANE_STATE_AUTO`
+(`auto_clklane_ctrl=1`, `phy_txrequestclkhs=1`) in `dpi_panel_init()`.
+Forced explicit continuous-HS mode instead
+(`auto_clklane_ctrl=0`, same `phy_txrequestclkhs=1`) directly via a
+raw register write. **Result: the clock lane (`clkstop` bit) left
+stop-state and stayed there — consistently across 30 real-rendering
+samples and a subsequent 90-second, zero-underrun extended capture.**
+This is the first time all session any register write has produced a
+persistent (not just momentary, as with the pattern generator) PHY
+state change during real rendering. However: **data lanes never
+followed** (`d0stop`/`d1stop` stayed at 1 for the entire 90-second
+capture, zero exceptions) and `vid_pkt_status` never showed the buffer
+filling. Checked for an analogous "force HS" mechanism for the data
+lanes specifically (searched LL header, register struct, and TRM for
+`forcetxstopmode`/`txrequestdatahs`/similar) — **none exists**, which
+is actually expected and consistent, not a dead end: per the TRM
+passage above, data-lane HS entry isn't a host-controllable "just force
+it" setting the way the clock lane is — it's entirely gated behind the
+bridge successfully handing off data, the same mechanism already
+identified as the real blocker. The clock lane has its own independent
+control path (continuous vs. non-continuous clock mode is a normal,
+separate DSI configuration choice); the data lanes don't.
+
+**Where this leaves things**: a genuine, reproducible, novel electrical
+change was found and confirmed real (not a config-reading mistake —
+the PHY register state persistently and measurably changed as a direct
+result of our write). It doesn't fix the display on its own, and its
+significance is that it validates our register access/understanding is
+functioning correctly at a basic level, while also cleanly confirming
+(rather than contradicting) the bridge-handoff root-cause localization
+already established. The forced-clock-lane change is left in the code
+(guarded by `DSI_BRIDGE_STATUS_TEST`) since it's real, harmless
+(zero crashes, zero underrun across 90s), and worth keeping for a
+future session that might find the actual bridge-handoff fix and want
+to test combinations. Not committed yet — sitting as uncommitted
+changes on `gvret` (the `HX8399_SELFTEST_RETRIGGER` panel self-test
+re-check and this forced-clock-lane test) pending review.

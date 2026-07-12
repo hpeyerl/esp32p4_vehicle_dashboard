@@ -802,6 +802,34 @@ static esp_err_t prv_panel_init(void)
                  "GETSCAN=%u then %u (+20ms)",
                  rddpm, rddsdr, numpe, rddid[0], rddid[1], rddid[2],
                  (unsigned)((scan1[0] << 8) | scan1[1]), (unsigned)((scan2[0] << 8) | scan2[1]));
+        ESP_LOGW(TAG, "DIAG: RDDSDR decoded: D7(RegLoad)=%d D6(Functionality)=%d D5(ChipAttach,unimpl)=%d D4(GlassBreak,unimpl)=%d "
+                 "-- per HX8399-C datasheet 5.10.1/5.10.2, both D7/D6 start at 0 on reset and are "
+                 "inverted to 1 ONLY if that Sleep-Out self-test PASSES; 0 after Sleep-Out plausibly means FAIL",
+                 (rddsdr >> 7) & 1, (rddsdr >> 6) & 1, (rddsdr >> 5) & 1, (rddsdr >> 4) & 1);
+
+#ifdef HX8399_SELFTEST_RETRIGGER
+        // TEMPORARY 2026-07-13: RDDSDR's D7/D6 self-tests are re-triggered
+        // by EVERY Sleep-Out command (not just the one during our own
+        // init sequence). Re-cycling Sleep-In -> Sleep-Out and re-reading
+        // to check whether a 0x00 result is consistent/repeatable, or a
+        // one-off. Respecting the datasheet's documented timing: SLPIN
+        // needs ~120ms to complete, SLPOUT needs 120ms before D6 is valid
+        // (5msec if already in Sleep Out mode -- using the longer 120ms
+        // to be safe either way).
+        {
+            esp_lcd_panel_io_tx_param(io, 0x10, NULL, 0);  // SLPIN
+            vTaskDelay(pdMS_TO_TICKS(150));
+            esp_lcd_panel_io_tx_param(io, 0x11, NULL, 0);  // SLPOUT
+            vTaskDelay(pdMS_TO_TICKS(130));
+            uint8_t rddsdr2 = 0xAA, rddpm2 = 0xAA;
+            esp_lcd_panel_io_rx_param(io, 0x0A, &rddpm2, 1);
+            esp_lcd_panel_io_rx_param(io, 0x0F, &rddsdr2, 1);
+            ESP_LOGW(TAG, "DIAG: after SLPIN->wait->SLPOUT->wait re-trigger: RDDPM=0x%02X RDDSDR=0x%02X "
+                     "D7=%d D6=%d (compare to first reading above -- consistent 0 across two independent "
+                     "self-test cycles would be a real, repeatable panel-side finding, not a fluke)",
+                     rddpm2, rddsdr2, (rddsdr2 >> 7) & 1, (rddsdr2 >> 6) & 1);
+        }
+#endif
     }
 #endif
 
@@ -929,6 +957,20 @@ static esp_err_t prv_panel_init(void)
                 ESP_INTR_FLAG_LOWMED, prv_dsi_bridge_isr, NULL, &brg_intr);
         ESP_LOGW(TAG, "DSI_BRIDGE: esp_intr_alloc(ETS_DSI_BRIDGE_INTR_SOURCE) -> %s",
                  esp_err_to_name(intr_ret));
+
+        // TEST 2026-07-13, from ESP32-P4 TRM 42.4.3.1.5/lpclk_ctrl: our
+        // driver sets the clock lane to "AUTO" mode (dpi_panel_init(),
+        // mipi_dsi_host_ll_set_clock_lane_state(..., ...AUTO)), which sets
+        // BOTH phy_txrequestclkhs=1 AND auto_clklane_ctrl=1. Forced HS
+        // mode (auto_clklane_ctrl=0) sets the SAME phy_txrequestclkhs=1
+        // but never lets hardware auto-revert the clock lane to LP during
+        // idle. Given phy_txrequestclkhs is already asserted in both
+        // modes, this may not matter -- testing directly rather than
+        // reasoning further about uncertain register semantics.
+        uint32_t lpclk_before = MIPI_DSI_HOST.lpclk_ctrl.val;
+        MIPI_DSI_HOST.lpclk_ctrl.val = 0x1;  // phy_txrequestclkhs=1, auto_clklane_ctrl=0 (forced continuous HS)
+        ESP_LOGW(TAG, "DSI_HOST: lpclk_ctrl before=0x%lX after=0x%lX (forced continuous HS clock lane, auto_clklane_ctrl=0)",
+                 (unsigned long)lpclk_before, (unsigned long)MIPI_DSI_HOST.lpclk_ctrl.val);
     }
 #endif
 
