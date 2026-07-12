@@ -5,13 +5,38 @@ CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
 CONFIG_ESP32P4_REV_MIN_1=y
 
 # ── PSRAM ─────────────────────────────────────────────────────
-# CONFIG_SPIRAM_SPEED_200M is non-deterministic on this board: a fresh
-# power-on sometimes calibrates fine, sometimes hangs forever in an infinite
-# "set to best phase: 0" DQS retry loop, regardless of L2 cache size. Not
-# shippable. Turns out PSRAM speed was never the real bug anyway — see
-# waveshare_display.c for the actual fix (DSI command-sequencing, not
-# bandwidth). Stick with the stable 20MHz default.
+# RE-TESTING AGAIN 2026-07-12, THIRD TIME: user recalled (from a lost
+# session) that an earlier "200MHz hang" report may have been a
+# measurement error — the DQS calibration retry loop can take ~100
+# iterations / 5+ seconds of visible "set to best phase" print spam
+# before genuinely completing and continuing to boot successfully. A
+# short capture window (10s, used in this session's most recent retest)
+# would show exactly that spam and could easily be misread as a
+# permanent hang. Retesting with a much longer capture window (60-90s+)
+# before concluding anything this time. Previous config-completeness
+# gaps (missing CONFIG_SPIRAM_XIP_FROM_PSRAM, tested on a debug not
+# perf-optimized build) also still apply and haven't been addressed yet
+# — see CONTEXT.md for the full, corrected history of this back-and-forth
+# (do not trust any single "confirmed broken" claim in an older section
+# without checking for a later correction).
+# TEMPORARILY BACK TO 20MHz 2026-07-13 while root-causing a deterministic
+# (10/10) xTaskCreateStaticPinnedToCore/xPortcheckValidStackMem crash at
+# scheduler start, specific to CONFIG_SPIRAM_SPEED_200M — confirmed NOT
+# caused by tuning duration (cut delayline repeats 100->8, no change) or
+# by L2 cache line size/capacity (tested both Waveshare's 256KB/128B and
+# ESP-IDF defaults, no change). Actively investigating — see CONTEXT.md
+# "2026-07-13" section for the full trace. Flip CONFIG_SPIRAM_SPEED_200M
+# + CONFIG_IDF_EXPERIMENTAL_FEATURES back on to resume that work; don't
+# leave the board sitting in the crash-reboot loop when not actively
+# testing it.
 CONFIG_SPIRAM=y
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_IDF_EXPERIMENTAL_FEATURES=y
+# (No true middle speed exists for ESP32-P4 in this ESP-IDF version —
+# Kconfig only offers 20M or 200M. See CONTEXT.md for the DMA-underrun
+# investigation this was trying to fix — root cause of blank display,
+# separate from PSRAM speed, see "single frame" test and the 2026-07-12
+# GDMA-feed findings.)
 
 # ── Flash ─────────────────────────────────────────────────────
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y

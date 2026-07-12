@@ -34,6 +34,7 @@
 #include "driver/ppa.h"
 #include "esp_cache.h"
 #include "hat_pins.h"
+#include "soc/mipi_dsi_host_struct.h"
 #include <string.h>
 
 // HX8399 panel driver — espressif/esp_lcd_hx8399 from ESP Component Registry
@@ -69,6 +70,32 @@ static const char *TAG = "ws_disp";
   #define WS_GT911_I2C_ADDR   0x5D
 #endif
 
+// ── Display MCU (I2C GPIO expander/regulator) ─────────────────────────────
+// Discovered 2026-07-11 from the Raspberry Pi kernel driver source
+// (drivers/regulator/waveshare-panel-regulator.c, compatible string
+// "waveshare,touchscreen-panel-regulator", driver name "waveshare_touchscreen"
+// — matches the panel's own dmesg output exactly) plus the panel's DSI
+// driver (drivers/gpu/drm/panel/panel-waveshare-dsi-v2.c). This chip sits
+// at I2C address 0x45 and is a 16-bit I2C GPIO expander that gates AVDD,
+// IOVCC, LCD reset, backlight enable, and the GT911 touch reset line — none
+// of which are native SoC GPIOs. Our firmware never talked to this chip
+// before; the DSI panel and GT911 touch chip were both sitting in reset
+// indefinitely, which fully explains both the DSI SWRESET hang and the
+// I2C-never-ACKs finding from the same session (see CONTEXT.md).
+#define MCU_I2C_ADDR          0x45
+#define MCU_REG_TP            0x94   // GPIO output state, bits 8-15 (high byte)
+#define MCU_REG_LCD           0x95   // GPIO output state, bits 0-7 (low byte)
+#define MCU_REG_PWM           0x96   // backlight brightness 0-255
+#define MCU_REG_SIZE          0x97   // read-only: panel size (12.3" panel reads 123)
+#define MCU_REG_ID            0x98   // read-only: hw id
+#define MCU_REG_VERSION       0x99   // read-only: mcu firmware version
+
+#define MCU_GPIO_AVDD          0
+#define MCU_GPIO_LCD_RESET     1
+#define MCU_GPIO_BL_ENABLE     2
+#define MCU_GPIO_IOVCC         4
+#define MCU_GPIO_TOUCH_RESET   9
+
 // ── DSI / DPI timing (portrait 720×1920) ─────────────────────────────────
 // Source: ws_panel_12_3_a_4lane_mode in Waveshare kernel driver.
 // htotal = 720 + HFP(10) + HSync(10) + HBP(12) = 752
@@ -76,8 +103,37 @@ static const char *TAG = "ws_disp";
 // P4-Nano has 2 DSI lanes only (confirmed from schematic).
 // Lane rate from HX8399_PANEL_BUS_DSI_2CH_CONFIG() in esp_lcd_hx8399.h.
 #define WS_DSI_LANE_NUM       2
-#define WS_DSI_LANE_MBPS      950   // 2-lane rate per esp_lcd_hx8399 component
-#define WS_DPI_CLK_MHZ        75    // reduced for 2-lane bandwidth
+// 2026-07-12 BREAKTHROUGH: was 950 (esp_lcd_hx8399 component's own 2-lane
+// default) — permanently stuck DSI PHY (MIPI_DSI_HOST.phy_status showed
+// clock+data lanes parked in LP stop-state forever, confirmed via direct
+// host register reads, independent of DPI clock/porches/panel behavior).
+// Found via Waveshare's own ESP32-P4-Nano-Kit-D reference BSP
+// (waveshareteam/Waveshare-ESP32-components,
+// bsp/esp32_p4_platform/display/lcd/esp_lcd_jd9365_10_1,
+// JD9365_PANEL_BUS_DSI_2CH_CONFIG()) — 1500 Mbps, combined with
+// WS_DPI_CLK_MHZ=80 below, is the first combination all session where
+// MIPI_DSI_HOST.phy_status actually shows the PHY leaving stop-state and
+// bursting (confirmed with OUR real 720x1920 resolution/porches
+// unchanged — see CONTEXT.md "2026-07-12" section for the full
+// isolation-test log). Neither value alone (tested independently)
+// produced any change — it's the dpi_clock/lane_bit_rate RATIO that
+// matters, not either value in isolation.
+#define WS_DSI_LANE_MBPS      1500
+// 2026-07-12 BREAKTHROUGH: was 75 (see below for the full prior history)
+// — paired with WS_DSI_LANE_MBPS=1500 above, this is the first DPI
+// clock/lane-rate combination all session that produces real HS bursts
+// (MIPI_DSI_HOST.phy_status leaving permanent stop-state). See
+// CONTEXT.md "2026-07-12" section.
+//
+// Prior history: REVERTED 2026-07-11 back to 75 (was dropped to 20 to
+// fix DMA underrun, then reverted again). HX8399-C datasheet (Table
+// 8.14) specifies Vertical Refresh rate = 60Hz. 75MHz gave ~49.7Hz —
+// 20MHz gave only ~13.25Hz, likely outside the panel's valid GIP timing
+// range. Pi5 cross-check (confirmed working) ran ~95MHz DPI clock ->
+// ~63Hz, consistent with the 60Hz datasheet spec. 80MHz here (with the
+// new 1500Mbps lane rate) gives ~53Hz — within the same ballpark as
+// both the datasheet spec and the Pi5 reference.
+#define WS_DPI_CLK_MHZ        75   // TEMPORARY: re-check pattern-gen (GDMA-independent) bursting at 75 vs 80, with lane rate held at 1500
 #define WS_HSYNC_PULSE_WIDTH  10
 #define WS_HSYNC_BACK_PORCH   12
 #define WS_HSYNC_FRONT_PORCH  10
@@ -103,6 +159,8 @@ static esp_lcd_dsi_bus_handle_t s_dsi_bus = NULL;
 static esp_ldo_channel_handle_t s_dsi_phy_ldo = NULL;
 static ppa_client_handle_t      s_ppa     = NULL;
 static void                    *s_rot_buf = NULL;
+static i2c_master_dev_handle_t  s_mcu_dev = NULL;
+static uint16_t                 s_mcu_gpio_state = 0;
 
 // ── vsync ISR → LVGL flush ready ─────────────────────────────────────────
 static bool IRAM_ATTR prv_dpi_trans_done_cb(esp_lcd_panel_handle_t panel,
@@ -229,7 +287,49 @@ static void prv_lvgl_flush_cb(lv_display_t *disp,
                 dst[y + (LCD_H_RES - 1 - x) * LCD_V_RES] = src[y * LCD_H_RES + x];
     }
 
-    esp_lcd_panel_draw_bitmap(s_panel, 0, 0, WS_PANEL_H, WS_PANEL_V, s_rot_buf);
+    esp_err_t draw_ret = esp_lcd_panel_draw_bitmap(s_panel, 0, 0, WS_PANEL_H, WS_PANEL_V, s_rot_buf);
+    if (draw_ret != ESP_OK) {
+        ESP_LOGE(TAG, "draw_bitmap FAILED: %s", esp_err_to_name(draw_ret));
+    }
+
+#ifdef DSI_HOST_STATUS_TEST
+    // Same host-side DSI status read as prv_panel_init(), but sampled DURING
+    // real, ongoing frame draws (the earlier pre-first-frame sample showed
+    // lanes parked in stop-state / FIFOs empty, which could just mean
+    // "hasn't started yet" — this fires on the 5th real flush, well inside
+    // the period where "frame N" + underrun spam is already happening, for
+    // a fair apples-to-apples read).
+    {
+        static int flush_count = 0;
+        flush_count++;
+        ESP_LOGD(TAG, "flush_cb call #%d", flush_count);
+        if (flush_count <= 30) {
+            uint32_t phy = MIPI_DSI_HOST.phy_status.val;
+            uint32_t vid = MIPI_DSI_HOST.vid_pkt_status.val;
+            ESP_LOGW(TAG, "DSI_HOST(flush#%d): phy=0x%08lX(clkstop=%lu d0stop=%lu d1stop=%lu) vid_pkt=0x%08lX",
+                     flush_count, (unsigned long)phy, (unsigned long)((phy >> 2) & 1),
+                     (unsigned long)((phy >> 4) & 1), (unsigned long)((phy >> 7) & 1),
+                     (unsigned long)vid);
+        }
+        if (flush_count == 1) {
+            for (int i = 0; i < 8; i++) {
+                uint32_t phy = MIPI_DSI_HOST.phy_status.val;
+                uint32_t st0 = MIPI_DSI_HOST.int_st0.val;
+                uint32_t st1 = MIPI_DSI_HOST.int_st1.val;
+                uint32_t vid = MIPI_DSI_HOST.vid_pkt_status.val;
+                ESP_LOGW(TAG, "DSI_HOST(mid-stream)[%d]: phy=0x%08lX(lock=%lu clkstop=%lu d0stop=%lu d1stop=%lu) "
+                         "int_st0=0x%08lX int_st1=0x%08lX(hs_tx_to=%lu dpi_under=%lu) vid_pkt=0x%08lX",
+                         i, (unsigned long)phy,
+                         (unsigned long)(phy & 1), (unsigned long)((phy >> 2) & 1),
+                         (unsigned long)((phy >> 4) & 1), (unsigned long)((phy >> 7) & 1),
+                         (unsigned long)st0, (unsigned long)st1,
+                         (unsigned long)(st1 & 1), (unsigned long)((st1 >> 19) & 1),
+                         (unsigned long)vid);
+                vTaskDelay(pdMS_TO_TICKS(20));
+            }
+        }
+    }
+#endif
 }
 
 // ── LVGL touch callback ───────────────────────────────────────────────────
@@ -316,6 +416,112 @@ static esp_err_t prv_i2c_init(void)
     return i2c_new_master_bus(&cfg, &s_i2c);
 }
 
+// ── Display MCU (GPIO expander/regulator, addr 0x45) ─────────────────────
+// Protocol reverse-engineered from drivers/regulator/waveshare-panel-regulator.c
+// (raspberrypi/linux). Write-only 16-bit GPIO state, split across two
+// 8-bit registers — every GPIO change requires rewriting BOTH registers,
+// there's no per-bit write. We keep our own shadow (s_mcu_gpio_state)
+// since we don't have the kernel's regmap cache.
+static esp_err_t prv_mcu_write_state(void)
+{
+    uint8_t tp_cmd[2]  = { MCU_REG_TP,  (uint8_t)(s_mcu_gpio_state >> 8) };
+    uint8_t lcd_cmd[2] = { MCU_REG_LCD, (uint8_t)(s_mcu_gpio_state & 0xFF) };
+    ESP_RETURN_ON_ERROR(i2c_master_transmit(s_mcu_dev, tp_cmd, sizeof(tp_cmd), 1000),
+                        TAG, "MCU write REG_TP failed");
+    return i2c_master_transmit(s_mcu_dev, lcd_cmd, sizeof(lcd_cmd), 1000);
+}
+
+static esp_err_t prv_mcu_set_gpio(int bit, bool level)
+{
+    if (level) s_mcu_gpio_state |= (uint16_t)(1U << bit);
+    else       s_mcu_gpio_state &= (uint16_t)~(1U << bit);
+    return prv_mcu_write_state();
+}
+
+// Mirrors waveshare_panel_i2c_read() exactly: two FULLY SEPARATE
+// transactions (write-only, then read-only), not a single combined
+// write+repeated-start+read. Upstream inserts a real 5-10ms gap between
+// them (usleep_range(5000, 10000)) — presumably the MCU firmware needs
+// that time after seeing the register address before the requested byte
+// is actually ready to shift out. A tight repeated-start read (what this
+// used before) could race that on some register/timing combination even
+// though it hasn't shown a problem so far (ID/SIZE/VERSION reads have
+// been byte-exact against the Pi5 reference every time). Matching
+// upstream's actual protocol removes that as a variable.
+static esp_err_t prv_mcu_read_reg(uint8_t reg, uint8_t *out)
+{
+    ESP_RETURN_ON_ERROR(i2c_master_transmit(s_mcu_dev, &reg, 1, 1000),
+                        TAG, "MCU read: register-address write failed");
+    vTaskDelay(pdMS_TO_TICKS(8));  // upstream: usleep_range(5000, 10000)
+    return i2c_master_receive(s_mcu_dev, out, 1, 1000);
+}
+
+// Phase 1: find the MCU and release the GT911 touch reset line. Must run
+// before prv_touch_init() — the touch chip is held in reset until this runs.
+static esp_err_t prv_mcu_init(void)
+{
+    i2c_device_config_t dev_cfg = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address  = MCU_I2C_ADDR,
+        .scl_speed_hz    = 100000,
+    };
+    ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(s_i2c, &dev_cfg, &s_mcu_dev),
+                        TAG, "MCU i2c_master_bus_add_device failed");
+
+    uint8_t id = 0, size = 0, ver = 0;
+    if (prv_mcu_read_reg(MCU_REG_ID, &id) == ESP_OK)
+        ESP_LOGI(TAG, "display MCU hw id = 0x%02x", id);
+    if (prv_mcu_read_reg(MCU_REG_SIZE, &size) == ESP_OK)
+        ESP_LOGI(TAG, "display MCU panel size = %d", size);
+    if (prv_mcu_read_reg(MCU_REG_VERSION, &ver) == ESP_OK)
+        ESP_LOGI(TAG, "display MCU fw version = 0x%02x", ver);
+
+    // Mirrors waveshare_panel_i2c_probe(): unconditionally sets bits 8+9
+    // ("Enable VCC" per upstream's own comment). Bit 9 is the GT911 touch
+    // reset line — this is the only place upstream ever touches it, no
+    // pulse, just released high once and left alone.
+    s_mcu_gpio_state = (uint16_t)((1U << MCU_GPIO_TOUCH_RESET) | (1U << 8));
+    ESP_RETURN_ON_ERROR(prv_mcu_write_state(), TAG, "MCU VCC/touch-reset enable failed");
+    // Upstream's own msleep(20) here is misleadingly short to copy verbatim:
+    // on real Linux, the Goodix driver only actually probes once the kernel's
+    // deferred-probe retry mechanism notices this MCU registered as a GPIO
+    // provider — that's typically hundreds of ms to seconds of real elapsed
+    // time, not 20ms. Our sequential init gets there almost instantly by
+    // comparison. Trying a much longer settle time (2026-07-11 experiment,
+    // touch was still all-zero at 20ms) before GT911's first register read.
+    vTaskDelay(pdMS_TO_TICKS(300));
+
+    ESP_LOGI(TAG, "display MCU init complete (touch reset released)");
+    return ESP_OK;
+}
+
+// Phase 2: power-sequence the LCD panel itself — IOVCC, AVDD, then a reset
+// pulse. Mirrors ws_panel_prepare() in panel-waveshare-dsi-v2.c exactly
+// (same order, same delays), confirmed working on real hardware (Pi5,
+// 2026-07-11). Call this immediately before esp_lcd_panel_reset()/init().
+static esp_err_t prv_mcu_panel_power_on(void)
+{
+    ESP_RETURN_ON_ERROR(prv_mcu_set_gpio(MCU_GPIO_IOVCC, true), TAG, "MCU iovcc failed");
+    vTaskDelay(pdMS_TO_TICKS(20));
+
+    ESP_RETURN_ON_ERROR(prv_mcu_set_gpio(MCU_GPIO_AVDD, true), TAG, "MCU avdd failed");
+    vTaskDelay(pdMS_TO_TICKS(20));
+
+    ESP_RETURN_ON_ERROR(prv_mcu_set_gpio(MCU_GPIO_LCD_RESET, false), TAG, "MCU reset assert failed");
+    vTaskDelay(pdMS_TO_TICKS(60));
+    ESP_RETURN_ON_ERROR(prv_mcu_set_gpio(MCU_GPIO_LCD_RESET, true), TAG, "MCU reset release failed");
+    vTaskDelay(pdMS_TO_TICKS(60));
+
+    // Backlight enable line also lives on the MCU (BL_EN, bit 2) — separate
+    // from our own GPIO22 LEDC PWM signal (prv_backlight_on()). Both are
+    // wired on this panel; enable this one too in case the panel's
+    // backlight driver actually gates on it rather than just the PWM duty.
+    ESP_RETURN_ON_ERROR(prv_mcu_set_gpio(MCU_GPIO_BL_ENABLE, true), TAG, "MCU backlight enable failed");
+
+    ESP_LOGI(TAG, "display MCU panel power sequence complete");
+    return ESP_OK;
+}
+
 // ── HX8399-C DSI panel init ───────────────────────────────────────────────
 static esp_err_t prv_panel_init(void)
 {
@@ -354,6 +560,43 @@ static esp_err_t prv_panel_init(void)
                         TAG, "Panel IO (DBI) create failed");
 
     // DPI (video) channel config
+#ifdef DSI_JD9365_COMBINED_TEST
+    // TEMPORARY 2026-07-12 diagnostic: literal, exact copy of
+    // JD9365_800_1280_PANEL_60HZ_DPI_CONFIG() from Waveshare's own proven
+    // ESP32-P4-Nano-Kit-D BSP (Waveshare-ESP32-components,
+    // bsp/esp32_p4_platform/display/lcd/esp_lcd_jd9365_10_1) — testing the
+    // FULL combination at once (resolution/DPI-clock/all porches) rather
+    // than one variable at a time, in case no single value matters in
+    // isolation but the combination does. Deliberately mismatched vs our
+    // real 720x1920 HX8399-C panel/init commands — irrelevant here since
+    // this only feeds DSI_PATTERN_GEN_TEST (host-generated, panel-
+    // independent). Do not expect a real image; only phy_status matters.
+    esp_lcd_dpi_panel_config_t dpi_cfg = {
+        .dpi_clk_src        = MIPI_DSI_DPI_CLK_SRC_DEFAULT,
+        .dpi_clock_freq_mhz = 80,
+        .virtual_channel    = 0,
+        .pixel_format       = LCD_COLOR_PIXEL_FORMAT_RGB565,
+        .num_fbs            = 2,
+        .video_timing = {
+            // Isolation test: OUR real 720x1920 res/porches, but with the
+            // JD9365 reference's 80MHz DPI clock (see dpi_clock_freq_mhz
+            // above) + 1500Mbps lane rate (WS_DSI_LANE_MBPS). First combined
+            // test (800x1280 res + these values) showed the clock lane
+            // briefly leave stop-state (clkstop=0) for the first time all
+            // session -- isolating whether that needs the foreign
+            // resolution too, or just clock/lane-rate.
+            .h_size            = WS_PANEL_H,
+            .v_size            = WS_PANEL_V,
+            .hsync_pulse_width = WS_HSYNC_PULSE_WIDTH,
+            .hsync_back_porch  = WS_HSYNC_BACK_PORCH,
+            .hsync_front_porch = WS_HSYNC_FRONT_PORCH,
+            .vsync_pulse_width = WS_VSYNC_PULSE_WIDTH,
+            .vsync_back_porch  = WS_VSYNC_BACK_PORCH,
+            .vsync_front_porch = WS_VSYNC_FRONT_PORCH,
+        },
+        .flags.use_dma2d = true,
+    };
+#else
     esp_lcd_dpi_panel_config_t dpi_cfg = {
         .dpi_clk_src        = MIPI_DSI_DPI_CLK_SRC_DEFAULT,
         .dpi_clock_freq_mhz = WS_DPI_CLK_MHZ,
@@ -372,6 +615,7 @@ static esp_err_t prv_panel_init(void)
         },
         .flags.use_dma2d = true,
     };
+#endif
 
     esp_lcd_panel_dev_config_t panel_cfg = {
         .reset_gpio_num = -1,          // no hardware reset line wired; panel
@@ -399,10 +643,197 @@ static esp_err_t prv_panel_init(void)
 
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_hx8399(io, &panel_cfg, &s_panel),
                         TAG, "HX8399 panel create failed");
+
+    // Power-sequence AVDD/IOVCC/reset via the display MCU before touching
+    // the panel at all — see prv_mcu_panel_power_on(). Without this the
+    // panel is left in reset indefinitely and every DSI command hangs.
+    ESP_RETURN_ON_ERROR(prv_mcu_panel_power_on(), TAG, "MCU panel power sequence failed");
+
     ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(s_panel), TAG, "Panel reset failed");
     // Display ON is sent from inside s_hx8399_init_cmds (before video streaming
     // starts) — see comment there. Do NOT call esp_lcd_panel_disp_on_off() here.
     ESP_RETURN_ON_ERROR(esp_lcd_panel_init(s_panel),  TAG, "Panel init failed");
+
+#ifdef DSI_PATTERN_GEN_TEST
+    // TEMPORARY 2026-07-12 diagnostic: enable the DSI HOST CONTROLLER's own
+    // built-in hardware test-pattern generator (esp_lcd_dpi_panel_set_pattern,
+    // esp_lcd_panel_dpi.c:579 -> mipi_dsi_host_ll_dpi_set_pattern_type()).
+    // This generates pixels entirely INSIDE the DesignWare DSI Host IP —
+    // no GDMA, no PSRAM fetch, no framebuffer at all. Found via Waveshare's
+    // own ESP32-P4-NANO-KIT-D reference example ("13_Displaycolorbar",
+    // waveshareteam/ESP32-P4-Platform on GitHub — same board family,
+    // different panel/JD9365 + GT9271 touch, 2-lane DSI). If HS bursts
+    // still never happen with this enabled (check via the
+    // DSI_HOST_STATUS_TEST block below/in flush_cb), that rules out our
+    // entire pixel pipeline (GDMA/PSRAM/PPA/framebuffer) as the cause —
+    // the bug would have to be in DSI host/bridge enable sequencing or
+    // video_timing config itself. If it DOES burst, our pixel-feed path
+    // is implicated instead.
+    {
+        esp_err_t pat_ret = esp_lcd_dpi_panel_set_pattern(s_panel, MIPI_DSI_PATTERN_BAR_VERTICAL);
+        ESP_LOGW(TAG, "DSI_PATTERN_GEN_TEST: set_pattern(BAR_VERTICAL) -> %s", esp_err_to_name(pat_ret));
+        for (int i = 0; i < 15; i++) {
+            uint32_t phy = MIPI_DSI_HOST.phy_status.val;
+            uint32_t vid = MIPI_DSI_HOST.vid_pkt_status.val;
+            ESP_LOGW(TAG, "DSI_PATTERN_GEN_TEST[%d]: phy=0x%08lX(clkstop=%lu d0stop=%lu d1stop=%lu) vid_pkt=0x%08lX",
+                     i, (unsigned long)phy, (unsigned long)((phy >> 2) & 1),
+                     (unsigned long)((phy >> 4) & 1), (unsigned long)((phy >> 7) & 1),
+                     (unsigned long)vid);
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+        // 2026-07-12: real HS bursts confirmed above (repeated all-3-lane
+        // activity), yet nothing visible on the physical screen. Checking
+        // whether the PANEL's own internal state shows any sign of having
+        // actually received/captured that video data — distinguishes
+        // "panel receives it but shows nothing" (implicates color/format)
+        // from "panel's HS receiver never captures anything real"
+        // (implicates signal integrity — points hard at the scope).
+        // GETSCAN (0x45) is the panel's own internal scanline counter —
+        // if it's incrementing, the panel's video-timing engine is
+        // actively tracking incoming HS data.
+        vTaskDelay(pdMS_TO_TICKS(500));
+        {
+            uint8_t rddpm = 0xAA, scan1[2] = {0xAA, 0xAA}, scan2[2] = {0xAA, 0xAA}, scan3[2] = {0xAA, 0xAA};
+            esp_lcd_panel_io_rx_param(io, 0x0A, &rddpm, 1);
+            esp_lcd_panel_io_rx_param(io, 0x45, scan1, 2);
+            vTaskDelay(pdMS_TO_TICKS(50));
+            esp_lcd_panel_io_rx_param(io, 0x45, scan2, 2);
+            vTaskDelay(pdMS_TO_TICKS(50));
+            esp_lcd_panel_io_rx_param(io, 0x45, scan3, 2);
+            ESP_LOGW(TAG, "DSI_PATTERN_GEN_TEST post-burst: RDDPM=0x%02X GETSCAN=%u,%u,%u (50ms apart)",
+                     rddpm, (unsigned)((scan1[0] << 8) | scan1[1]),
+                     (unsigned)((scan2[0] << 8) | scan2[1]), (unsigned)((scan3[0] << 8) | scan3[1]));
+        }
+    }
+#endif
+
+#ifdef PANEL_DIAG_READ_TEST
+    // TEMPORARY 2026-07-12 diagnostic: read back several standard MIPI DCS
+    // status registers over the DSI command channel. Unlike every write
+    // we've sent so far (which only tells us the ESP32 host-side HAL call
+    // returned ESP_OK — NOT that the byte was ever really latched by the
+    // panel; see the mipi_dsi_hal patch episode in CONTEXT.md), a DCS
+    // *read* requires genuine two-way electrical turnaround (BTA) on the
+    // data lane. RDNUMPE (0x05) is the most targeted one here: it reports
+    // the panel's own count of DSI parity/ECC errors, which can tell us
+    // whether the LP command channel is clean while the HS video lane is
+    // actually garbled (the two use different electrical modes on the same
+    // physical pins). GETSCAN (0x45) is read twice ~20ms apart: if the
+    // internal scanline counter is incrementing, the panel's own video
+    // timing engine is actively running.
+    {
+        uint8_t rddpm = 0xAA, rddsdr = 0xAA, numpe = 0xAA;
+        uint8_t rddid[3] = {0xAA, 0xAA, 0xAA};
+        uint8_t scan1[2] = {0xAA, 0xAA}, scan2[2] = {0xAA, 0xAA};
+        esp_lcd_panel_io_rx_param(io, 0x0A, &rddpm, 1);
+        esp_lcd_panel_io_rx_param(io, 0x0F, &rddsdr, 1);
+        esp_lcd_panel_io_rx_param(io, 0x05, &numpe, 1);
+        esp_lcd_panel_io_rx_param(io, 0x04, rddid, 3);
+        esp_lcd_panel_io_rx_param(io, 0x45, scan1, 2);
+        vTaskDelay(pdMS_TO_TICKS(20));
+        esp_lcd_panel_io_rx_param(io, 0x45, scan2, 2);
+        ESP_LOGW(TAG, "DIAG: RDDPM=0x%02X RDDSDR=0x%02X RDNUMPE=0x%02X RDDID=%02X:%02X:%02X "
+                 "GETSCAN=%u then %u (+20ms)",
+                 rddpm, rddsdr, numpe, rddid[0], rddid[1], rddid[2],
+                 (unsigned)((scan1[0] << 8) | scan1[1]), (unsigned)((scan2[0] << 8) | scan2[1]));
+    }
+#endif
+
+#ifdef DSI_HOST_STATUS_TEST
+    // TEMPORARY 2026-07-12 diagnostic: read the ESP32-P4's OWN DSI host
+    // controller status registers (chip side, NOT the panel) — these are
+    // a completely different hardware path from the LP-mode "Gen" command
+    // generator that RDDPM/RDNUMPE/etc. exercised. Video mode is already
+    // enabled by this point (hx8399->init() turns it on at the end of
+    // esp_lcd_panel_init()), so if HS video is actually leaving the chip,
+    // these registers should show it independent of anything the panel
+    // self-reports. phy_status bit0=phy_lock, bit2=clk lane stopstate,
+    // bit4=D0 stopstate, bit7=D1 stopstate (stopstate=1 means the lane is
+    // parked in LP-11 / NOT bursting HS at that instant — expected to
+    // toggle low periodically during real video transmission). int_st1
+    // bit0=to_hs_tx (HS TX timeout), bit19=dpi_buff_pld_under (HOST-side
+    // DPI FIFO underrun, distinct from the LCD-peripheral-side "can't
+    // fetch data" error we already see). int_st0/int_st1 are clear-on-read
+    // per DesignWare IP convention, so sample repeatedly to catch anything
+    // accumulating.
+    {
+        for (int i = 0; i < 6; i++) {
+            uint32_t phy  = MIPI_DSI_HOST.phy_status.val;
+            uint32_t st0  = MIPI_DSI_HOST.int_st0.val;
+            uint32_t st1  = MIPI_DSI_HOST.int_st1.val;
+            uint32_t vid  = MIPI_DSI_HOST.vid_pkt_status.val;
+            ESP_LOGW(TAG, "DSI_HOST[%d]: phy=0x%08lX(lock=%lu clkstop=%lu d0stop=%lu d1stop=%lu) "
+                     "int_st0=0x%08lX int_st1=0x%08lX(hs_tx_to=%lu dpi_under=%lu) vid_pkt=0x%08lX",
+                     i, (unsigned long)phy,
+                     (unsigned long)(phy & 1), (unsigned long)((phy >> 2) & 1),
+                     (unsigned long)((phy >> 4) & 1), (unsigned long)((phy >> 7) & 1),
+                     (unsigned long)st0, (unsigned long)st1,
+                     (unsigned long)(st1 & 1), (unsigned long)((st1 >> 19) & 1),
+                     (unsigned long)vid);
+            vTaskDelay(pdMS_TO_TICKS(80));
+        }
+    }
+#endif
+
+#ifdef PANEL_BIST_TEST
+    // TEMPORARY 2026-07-12 diagnostic, RETRY 2: enable the HX8399-C's own
+    // internal BIST free-running pattern generator (datasheet SETDISP/B2h,
+    // Bank1, DISP_BIST_EN bit). First attempt used the WRONG SETEXTC
+    // unlock key ({0xFF,0x83,0x99}, copied from the generic Espressif
+    // reference driver) — this panel's real unlock key, confirmed working
+    // in s_hx8399_init_cmds above, is {0x83,0x10,0x2E}. Also dropping the
+    // unverified BDh "bank select" (never used anywhere in this panel's
+    // real init sequence — it was only ever seen paired with an unrelated
+    // command, D8h, in the generic reference table) in favor of a single
+    // continuous B2h write covering both Bank0 (10 bytes, the SAME known-
+    // good calibration values already in s_hx8399_init_cmds) and Bank1 (9
+    // bytes, with DISP_BIST_EN set) in one packet — matching how Himax
+    // manufacturer commands document "Bank0"/"Bank1" as one continuous
+    // parameter stream, not a separately page-selected register space.
+    {
+        ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_param(io, 0xB9,
+                (uint8_t[]){0x83, 0x10, 0x2E}, 3), TAG, "BIST: SETEXTC failed");
+        esp_err_t bist_ret = esp_lcd_panel_io_tx_param(io, 0xB2, (uint8_t[]){
+                // Bank0 (10 bytes) — identical to s_hx8399_init_cmds's known-good B2h
+                0x00, 0x02, 0x00, 0x90, 0x14, 0x0C, 0x02, 0x0C, 0x02, 0x37,
+                // Bank1 (9 bytes) — byte1: FRM_PATTERN_CYCLE=0000 | DISP_BIST_EN=1 |
+                // FRM_SCAN_CYCLE=000 = 0x08. byte2 low nibble: PTN_1ST_NUM=0000=White.
+                0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            }, 19);
+        ESP_LOGW(TAG, "PANEL_BIST_TEST retry2: B2h 19-byte (Bank0+Bank1) DISP_BIST_EN=1 (white) -> %s",
+                 esp_err_to_name(bist_ret));
+        ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_param(io, 0xB9,
+                (uint8_t[]){0x00}, 1), TAG, "BIST: page close failed");
+    }
+#endif
+
+#ifdef SOLID_FILL_TEST
+    // TEMPORARY 2026-07-12 diagnostic: bypass LVGL/PPA rotation entirely and
+    // push one solid white frame straight into the panel via a single raw
+    // esp_lcd_panel_draw_bitmap() call, full native panel bounds, no
+    // coordinate transform of any kind. Tests whether the DSI/panel/MCU/
+    // cable chain can display ANY real pixel data at all, independent of
+    // our own LVGL/PPA rotation pipeline (which has been suspected of a
+    // possible coordinate/off-screen bug — see CONTEXT.md). If this shows
+    // up, the chain works and the bug is in our rotation code. If not, the
+    // problem is upstream of our own pixel formatting entirely.
+    {
+        size_t fill_bytes = (size_t)WS_PANEL_H * WS_PANEL_V * sizeof(uint16_t);
+        uint16_t *fill_buf = heap_caps_aligned_alloc(128, fill_bytes,
+                                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (fill_buf) {
+            for (size_t i = 0; i < fill_bytes / sizeof(uint16_t); i++) {
+                fill_buf[i] = 0xFFFF;  // solid white, RGB565
+            }
+            esp_cache_msync(fill_buf, fill_bytes, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+            esp_err_t fill_ret = esp_lcd_panel_draw_bitmap(s_panel, 0, 0, WS_PANEL_H, WS_PANEL_V, fill_buf);
+            ESP_LOGW(TAG, "SOLID_FILL_TEST: draw_bitmap(0,0,%d,%d) solid white -> %s",
+                     WS_PANEL_H, WS_PANEL_V, esp_err_to_name(fill_ret));
+        } else {
+            ESP_LOGE(TAG, "SOLID_FILL_TEST: fill_buf alloc failed");
+        }
+    }
+#endif
 
     // PPA SRM for hardware rotation in flush cb
     ppa_client_config_t ppa_cfg = { .oper_type = PPA_OPERATION_SRM };
@@ -452,6 +883,49 @@ static esp_err_t prv_touch_init(void)
     return ESP_OK;
 }
 
+// ── Touch-only diagnostic ─────────────────────────────────────────────────
+// Bypasses the DSI panel entirely (prv_panel_init() hangs forever on the
+// current hardware) so touch can be tested independent of the display.
+// Never returns — call instead of, not before, the normal init/app_main path.
+void ws_touch_diag_run(void)
+{
+    ESP_LOGI(TAG, "touch-diag: init: display 5V rail enable GPIO%d", HAT_DISP_PWR_EN);
+    prv_display_power_enable();
+
+    ESP_LOGI(TAG, "touch-diag: init: I2C SDA=GPIO%d SCL=GPIO%d", WS_I2C_SDA, WS_I2C_SCL);
+    ESP_ERROR_CHECK(prv_i2c_init());
+
+    ESP_LOGI(TAG, "touch-diag: init: display MCU (addr 0x%02X)", MCU_I2C_ADDR);
+    ESP_ERROR_CHECK(prv_mcu_init());
+
+    ESP_LOGI(TAG, "touch-diag: init: GT911 touch");
+    esp_err_t ret = prv_touch_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "touch-diag: GT911 init failed (0x%x) — nothing to poll", ret);
+        return;
+    }
+
+    ESP_LOGI(TAG, "touch-diag: touch the panel now — polling every 100ms");
+    bool was_pressed = false;
+    while (1) {
+        esp_lcd_touch_read_data(s_touch);
+
+        esp_lcd_touch_point_data_t pt = {};
+        uint8_t cnt = 0;
+        esp_lcd_touch_get_data(s_touch, &pt, &cnt, 1);
+
+        if (cnt > 0) {
+            ESP_LOGI(TAG, "touch-diag: PRESSED  x=%d y=%d", pt.x, pt.y);
+            was_pressed = true;
+        } else if (was_pressed) {
+            ESP_LOGI(TAG, "touch-diag: RELEASED");
+            was_pressed = false;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+
 // ── Public API ────────────────────────────────────────────────────────────
 esp_lcd_panel_handle_t ws_get_panel(void) { return s_panel; }
 
@@ -464,6 +938,11 @@ esp_err_t ws_display_init(lv_display_t **disp_out)
 
     ESP_LOGI(TAG, "init: I2C SDA=GPIO%d SCL=GPIO%d", WS_I2C_SDA, WS_I2C_SCL);
     if ((ret = prv_i2c_init()) != ESP_OK) return ret;
+
+    // Display MCU (addr 0x45) must run before touch init below — it's what
+    // releases the GT911's reset line. See prv_mcu_init() for provenance.
+    ESP_LOGI(TAG, "init: display MCU (addr 0x%02X)", MCU_I2C_ADDR);
+    if ((ret = prv_mcu_init()) != ESP_OK) return ret;
 
     // Touch init runs BEFORE the DSI panel sequence, deliberately. It's
     // electrically independent of DSI entirely (separate pins, separate

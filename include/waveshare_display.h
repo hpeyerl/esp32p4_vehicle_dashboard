@@ -21,6 +21,9 @@ extern "C" {
 esp_err_t              ws_display_init(lv_display_t **disp_out);
 esp_lcd_panel_handle_t ws_get_panel(void);
 
+// Standalone touch test — bypasses the DSI panel entirely. Never returns.
+void ws_touch_diag_run(void);
+
 #ifdef __cplusplus
 }
 #endif

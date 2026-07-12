@@ -31,6 +31,9 @@
 #include "units.h"
 #include "hat_pins.h"
 #include "gvret_server.h"
+#ifdef TOUCH_ONLY_TEST
+#include "waveshare_display.h"
+#endif
 
 #ifndef STRINGIFY
   #define STRINGIFY_(x) #x
@@ -151,6 +154,24 @@ static void ui_task(void *arg)
             snap.gear            = 3;
         }
 #endif
+#ifdef UI_RENDER_ONCE_TEST
+        // TEMPORARY 2026-07-11 DIAGNOSTIC: render exactly one frame, then go
+        // fully idle (no more dashboard_ui_update/lv_refr_now/lv_timer_handler
+        // — nothing further touches PSRAM from the app side). Tests whether
+        // continuous DMA underrun during DPI streaming (see CONTEXT.md) is
+        // caused by the DPI controller's own continuous hardware scan-out
+        // bandwidth need (would persist even fully idle) vs. contention from
+        // our own app's continuous LVGL/PPA PSRAM traffic (would stop/drop
+        // once the app goes idle after frame 0). Remove this #ifdef block
+        // once the underrun investigation concludes either way.
+        static bool rendered_once = false;
+        if (!rendered_once) {
+            dashboard_ui_update(&snap);
+            lv_refr_now(g_disp);
+            rendered_once = true;
+            ESP_LOGW(TAG, "UI_RENDER_ONCE_TEST: rendered frame 0, going idle — app will touch PSRAM no further");
+        }
+#else
         static DashData last_snap = {};
         if (memcmp(&snap, &last_snap, sizeof(DashData)) != 0) {
             dashboard_ui_update(&snap);
@@ -159,6 +180,7 @@ static void ui_task(void *arg)
         } else {
             lv_timer_handler();
         }
+#endif
 
         ESP_LOGD(TAG, "frame %lu", (unsigned long)frame++);
         vTaskDelayUntil(&last_wake, period);
@@ -189,6 +211,13 @@ extern "C" void app_main(void)
 
     ESP_LOGI(TAG, "EV Dashboard  IDF %s  display: %s  units: %s",
              esp_get_idf_version(), disp_name, UNITS_SPEED_LABEL);
+
+#ifdef TOUCH_ONLY_TEST
+    // Diagnostic build: skip the DSI panel (prv_panel_init() hangs on current
+    // hardware) and everything after it, poll touch, never return.
+    ws_touch_diag_run();
+    return;
+#endif
 
     g_dash_mutex = xSemaphoreCreateMutex();
     if (!g_dash_mutex) { ESP_LOGE(TAG, "mutex create failed"); abort(); }
