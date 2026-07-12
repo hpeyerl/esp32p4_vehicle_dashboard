@@ -2140,3 +2140,42 @@ ESP_3V3 rail via the DSI cable if sequenced wrong). Confirms the
 power-cycle test that showed "no change" (ruling out the latched-state
 theory above) was done correctly, not confounded by improper
 sequencing — the negative result stands as reliable.
+
+## 2026-07-13 (continued): ESP-IDF 5.5.4 attempted on a branch — confirmed same link failure; TCM fix corrected (was incomplete)
+
+Per user's explicit request, committed the session's work to `gvret`
+(commit `d866c29`) and created branch `esp-idf-5.5-upgrade` to test
+5.5.4 without risking the working state.
+
+**5.5.4 attempt: failed identically to 2026-07-11.** Same undefined
+references (`_bss_start_low` etc.), toolchain pin had to be dropped
+again. Checked for an ESP-IDF 6.x pioarduino option per user's fallback
+suggestion — **none exists**; the "6.x" entries in pioarduino's version
+table are the old platformio-native `espressif32` package's own
+numbering, mapping to ancient ESP-IDF 4.4.x (confirmed the naming
+collision the fork had already flagged). Committed the failed attempt
+to the branch (`a340581`) for whoever wants to actually solve the
+linker script gap later, and returned cleanly to `gvret`.
+
+**Important correction to the 200MHz TCM fix, found immediately after
+returning to `gvret` for a final sanity check**: the `esp_ptr_byte_
+accessible()` patch alone was INCOMPLETE. A fresh rebuild+flash
+produced a *different* assert — `xPortCheckValidTCBMem` instead of
+`xPortcheckValidStackMem` — same TCM root cause, but hitting the idle
+task's TCB buffer instead of its stack buffer this time.
+`xPortCheckValidTCBMem()` has no `ALLOW_EXT_MEM` bypass (unlike the
+stack check), so it unconditionally requires `esp_ptr_internal(ptr)` —
+which still didn't recognize TCM, since that fix was reverted earlier
+in the session under the (now proven wrong) assumption it was dead
+code. **Added the companion `esp_ptr_internal()` patch to
+`scripts/patch_espidf_builder.py`** (marker `[patched 2026-07-13]
+esp_ptr_internal TCM fix`). **Verified 5/5 clean boots at 200MHz with
+both fixes together** — this is now the actually-complete fix. Lesson:
+when a fix appears to work, a handful of resets isn't necessarily
+enough if the failure can land on more than one code path with the same
+root cause — worth remembering before declaring victory too early next
+time.
+
+Committed as `c35f49d`. Board and `gvret` branch left in this
+confirmed-working state (200MHz PSRAM, both TCM patches, 1500Mbps/75MHz
+DSI PHY-trigger config) for whenever the session resumes.
