@@ -2179,3 +2179,123 @@ time.
 Committed as `c35f49d`. Board and `gvret` branch left in this
 confirmed-working state (200MHz PSRAM, both TCM patches, 1500Mbps/75MHz
 DSI PHY-trigger config) for whenever the session resumes.
+
+## 2026-07-13 (continued): exhaustive DSI Bridge register investigation — every config knob checked correct, real gap now precisely bounded
+
+Per user's request, went back to diagnosing the DSI bridge problem (why
+`MIPI_DSI_HOST.vid_pkt_status`'s shared buffer stays empty under real
+rendering despite the DPI peripheral feeding data with zero underrun at
+200MHz) — and to specifically compare our 5.4.2 bridge driver code
+against the locally-cached ESP-IDF 5.5.3/6.0.0 copies (found already on
+this machine from unrelated prior work — see
+`~/.platformio/packages/framework-espidf@3.50503.0` = 5.5.3,
+`@4.60000.0` = 6.0.0, confirmed via `esp_idf_version.h`).
+
+**Diffed `esp_lcd_panel_dpi.c` between 5.4.2 and 5.5.3.** Two real
+differences found:
+1. 5.5.3 adds a genuinely separate, dedicated CPU-level interrupt
+   handler for the bridge's own IRQ line (`esp_intr_alloc(soc_mipi_dsi_
+   signals[bus_id].brg_irq_id, ...)`, `mipi_dsi_bridge_isr_handler()`).
+   5.4.2 only reads/clears the bridge's interrupt status register as a
+   side effect of the *unrelated* DMA-transfer-completion callback —
+   never registers a real ISR on the bridge's own interrupt source at
+   all.
+2. 5.5.3 splits color format configuration into separate
+   `mipi_dsi_brg_ll_set_input_color_format()` /
+   `_set_output_color_format()` calls. 5.4.2 only has
+   `mipi_dsi_brg_ll_set_input_color_space()` — confirmed via LL header
+   diff that `set_output_color_format()` doesn't exist in 5.4.2's API
+   surface at all.
+
+**Traced the actual hardware register layout** (`soc/esp32p4/register/
+soc/mipi_dsi_bridge_struct.h`, `hal/esp32p4/include/hal/mipi_dsi_brg_ll.h`)
+to understand exactly what these differences touch, found the bridge's
+register struct is directly accessible via `extern dsi_brg_dev_t
+MIPI_DSI_BRIDGE;` (same pattern as `MIPI_DSI_HOST`), and built a
+comprehensive live diagnostic (`DSI_BRIDGE_STATUS_TEST` build flag) to
+read every relevant bridge register directly off real hardware, both
+right after init and during real ongoing rendering. Findings, all
+checked and ruled out one by one:
+
+- **`pixel_type.raw_type = 2` (RGB565) — already correct.** The
+  "missing output color format" theory from the diff doesn't hold up on
+  real hardware: `set_input_color_space()` (the one call 5.4.2 does
+  make) already lands on the correct RGB565 encoding, and this chip's
+  actual register (per the SOC header) only has one shared `raw_type`
+  field, not separate input/output type fields — the 5.5.3 API split
+  may be cosmetic/for-a-different-variant rather than fixing a real gap
+  here.
+- **`en.dsi_en=1`, `dpi_misc_config.dpi_en=1`** — both master-enable and
+  DPI-output-enable bits correctly set (confirmed via source: both are
+  set at panel *creation* time, in the function that becomes
+  `esp_lcd_new_panel_dpi`'s core, well before `dpi_panel_init()` runs;
+  the only place either gets cleared is `dpi_panel_del()`, never
+  called).
+- **All four bridge-side timing registers (`dpi_v_cfg0/1`,
+  `dpi_h_cfg0/1`) exactly match our real panel config** — vtotal=2006,
+  vdisp=1920, vsync=18, vbank=4, htotal=752, hdisp=720, hsync=10,
+  hbank=12 — every single value matches our `WS_HSYNC_*`/`WS_VSYNC_*`
+  defines and the documented 720×1920 panel geometry precisely. No
+  timing mismatch between what the bridge thinks the frame geometry is
+  and what we actually configured.
+- **`raw_num_cfg.raw_num_total = 345600`** — exactly matches
+  720×1920×16bpp/64, confirming `mipi_dsi_brg_ll_set_num_pixel_bits()`
+  correctly computed our real frame size.
+- **`mem_clk_ctrl` (two "force FIFO clock on" bits, both default 0) —
+  forced both bits on directly, zero effect.** Ruled out dynamic
+  clock-gating as the cause.
+- **`dpi_lcd_ctl` (real standard DPI protocol signals: `dpishutdn`,
+  `dpicolorm`, `dpiupdatecfg`) all read 0** — `dpishutdn` in particular
+  would directly explain "display told to stop" if set, but it isn't.
+- **`raw_buf_credit_ctl` at hardware default** — confirmed irrelevant
+  per its own register description ("valid only when dsi_bridge as
+  flow controller"); we use DMA as flow controller
+  (`mipi_dsi_brg_ll_set_flow_controller(..., MIPI_DSI_LL_FLOW_
+  CONTROLLER_DMA)`), so this register's value doesn't matter for us.
+- **Installed a real, dedicated interrupt handler on the bridge's own
+  IRQ line from app code directly** (`esp_intr_alloc(ETS_DSI_BRIDGE_
+  INTR_SOURCE, ...)` — the interrupt source constant is a real hardware/
+  interrupt-matrix definition, confirmed present in 5.4.2 too, so this
+  didn't need a framework patch). Allocation succeeded (`ESP_OK`), but
+  **the ISR never fires** (`isr_count=0` across 30 real frames) — this
+  register only has an `underrun` interrupt source, no "packet
+  transmitted"/"drain complete" event exists to hook, so a dedicated
+  ISR wouldn't affect data flow even if wired up. Theory ruled out.
+
+**What we now know for certain, with very high confidence:** the
+bridge's own internal raw pixel buffer (`fifo_flow_status.raw_buf_depth`)
+IS actively receiving real data — sampled continuously fluctuating in
+the 770-1021 range (out of ~1024 capacity) across 30 real frames, never
+zero, never static — proving the full GDMA→DPI-peripheral→bridge-raw-
+buffer chain works end to end, all the way up to the bridge's own input
+stage. Every bridge-side configuration register we can find and
+interpret (enable, format, timing, clocking, DPI protocol signals, flow
+control, interrupts) is correctly configured and matches our real panel
+geometry exactly. Yet `MIPI_DSI_HOST.vid_pkt_status` (the shared
+buffer between the bridge's *output* and the Host's transmit path)
+never receives anything, and the DSI PHY never bursts under real
+rendering. One mildly suspicious observation: `raw_buf_depth` never
+drops below ~770 across many samples — consistent with the buffer being
+permanently backed up near its ceiling rather than genuinely cycling
+through fill/drain, though this isn't independently confirmed as
+meaningful (could just be a genuinely fast, healthy steady-state).
+
+**Conclusion: the remaining gap is now about as precisely bounded as
+register-level investigation without an actual hardware TRM can get
+it.** It sits specifically in the bridge's internal raw-pixel-to-DSI-
+packet conversion step — not in configuration (everything checked is
+correct), not in an obviously-missing enable/interrupt/clock (all
+checked and ruled out). This is either a genuine, undocumented silicon
+errata specific to this ECO2 chip revision with no software workaround
+we can find from public headers, or something that would only be
+visible electrically (the oscilloscope session). **This is now the
+strongest case yet for prioritizing the scope session** — every
+software-side lever that can be identified from public ESP-IDF source
+has been tried, tested, and ruled out or confirmed correct.
+
+**Repo state**: `DSI_BRIDGE_STATUS_TEST` build flag added to
+`[env:waveshare_debug_usb]`, diagnostic code left in place in
+`waveshare_display.c` (register dump + `mem_clk_ctrl` force-on test +
+dedicated bridge ISR allocation) for reuse in a future session. Not yet
+committed — sitting as uncommitted changes on `gvret` pending user
+review.

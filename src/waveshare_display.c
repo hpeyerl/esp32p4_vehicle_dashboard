@@ -35,7 +35,14 @@
 #include "esp_cache.h"
 #include "hat_pins.h"
 #include "soc/mipi_dsi_host_struct.h"
+#include "soc/mipi_dsi_bridge_struct.h"
+#include "soc/interrupts.h"
+#include "esp_intr_alloc.h"
 #include <string.h>
+
+#ifdef DSI_BRIDGE_STATUS_TEST
+static volatile uint32_t s_brg_isr_count = 0;
+#endif
 
 // HX8399 panel driver — espressif/esp_lcd_hx8399 from ESP Component Registry
 #include "esp_lcd_hx8399.h"
@@ -310,6 +317,15 @@ static void prv_lvgl_flush_cb(lv_display_t *disp,
                      flush_count, (unsigned long)phy, (unsigned long)((phy >> 2) & 1),
                      (unsigned long)((phy >> 4) & 1), (unsigned long)((phy >> 7) & 1),
                      (unsigned long)vid);
+#ifdef DSI_BRIDGE_STATUS_TEST
+            uint32_t pixel_type = MIPI_DSI_BRIDGE.pixel_type.val;
+            uint32_t fifo = MIPI_DSI_BRIDGE.fifo_flow_status.val;
+            uint32_t dpi_misc = MIPI_DSI_BRIDGE.dpi_misc_config.val;
+            ESP_LOGW(TAG, "DSI_BRIDGE(flush#%d): en=%lu pixel_type=0x%lX raw_buf_depth=%lu dpi_en=%lu isr_count=%lu",
+                     flush_count, (unsigned long)MIPI_DSI_BRIDGE.en.val, (unsigned long)pixel_type,
+                     (unsigned long)(fifo & 0x3FFF), (unsigned long)(dpi_misc & 1),
+                     (unsigned long)s_brg_isr_count);
+#endif
         }
         if (flush_count == 1) {
             for (int i = 0; i < 8; i++) {
@@ -521,6 +537,28 @@ static esp_err_t prv_mcu_panel_power_on(void)
     ESP_LOGI(TAG, "display MCU panel power sequence complete");
     return ESP_OK;
 }
+
+#ifdef DSI_BRIDGE_STATUS_TEST
+// TEMPORARY 2026-07-13: real, dedicated CPU-level interrupt handler for the
+// DSI Bridge's own IRQ line (ETS_DSI_BRIDGE_INTR_SOURCE) — mirrors what
+// ESP-IDF 5.5.3 added (esp_lcd_panel_dpi.c's mipi_dsi_bridge_isr_handler,
+// confirmed absent from our 5.4.2) but installed directly from app code,
+// no framework patch needed, since the interrupt source constant is a
+// real hardware/interrupt-matrix definition present in 5.4.2 too. Testing
+// whether having a genuine, dedicated ISR connected to the bridge's own
+// IRQ line (vs. 5.4.2's approach of only reading/clearing its status
+// register as a side effect of the unrelated DMA-completion callback)
+// changes anything — some peripherals use the interrupt controller
+// actually servicing their specific IRQ source as part of an internal
+// handshake, not just having status bits cleared from any context.
+static void IRAM_ATTR prv_dsi_bridge_isr(void *arg)
+{
+    (void)arg;
+    uint32_t raw = MIPI_DSI_BRIDGE.int_raw.val;
+    MIPI_DSI_BRIDGE.int_clr.val = raw;
+    s_brg_isr_count++;
+}
+#endif
 
 // ── HX8399-C DSI panel init ───────────────────────────────────────────────
 static esp_err_t prv_panel_init(void)
@@ -772,6 +810,97 @@ static esp_err_t prv_panel_init(void)
                      (unsigned long)vid);
             vTaskDelay(pdMS_TO_TICKS(80));
         }
+    }
+#endif
+
+#ifdef DSI_BRIDGE_STATUS_TEST
+    // TEMPORARY 2026-07-13 diagnostic: read the DSI BRIDGE's own registers
+    // directly (MIPI_DSI_BRIDGE, soc/mipi_dsi_bridge_struct.h) — a
+    // different hardware block from MIPI_DSI_HOST above. Diffing our
+    // esp_lcd_panel_dpi.c (ESP-IDF 5.4.2) against a locally-cached 5.5.3
+    // copy found ESP-IDF 5.4.2 never calls a "set output color format"
+    // step for the bridge — only mipi_dsi_brg_ll_set_input_color_space()
+    // is called (esp_lcd_panel_dpi.c ~line 322), no output-side
+    // equivalent exists in 5.4.2's LL header at all. Checking pixel_type
+    // (input/output format config, default 0=RGB888 per the raw_type
+    // field's reset value) and fifo_flow_status.raw_buf_depth (the
+    // bridge's OWN internal buffer fill level, independent of
+    // MIPI_DSI_HOST's vid_pkt_status) to see whether data ever reaches
+    // the bridge's raw buffer at all, or arrives but never drains.
+    {
+        uint32_t pixel_type = MIPI_DSI_BRIDGE.pixel_type.val;
+        uint32_t en = MIPI_DSI_BRIDGE.en.val;
+        uint32_t dpi_misc = MIPI_DSI_BRIDGE.dpi_misc_config.val;
+        uint32_t fifo = MIPI_DSI_BRIDGE.fifo_flow_status.val;
+        ESP_LOGW(TAG, "DSI_BRIDGE: en=0x%lX pixel_type=0x%lX(raw_type=%lu dpi_config=%lu data_in_type=%lu) "
+                 "dpi_misc=0x%lX(dpi_en=%lu) raw_buf_depth=%lu",
+                 (unsigned long)en, (unsigned long)pixel_type,
+                 (unsigned long)(pixel_type & 0xF), (unsigned long)((pixel_type >> 4) & 0x3),
+                 (unsigned long)((pixel_type >> 6) & 0x1),
+                 (unsigned long)dpi_misc, (unsigned long)(dpi_misc & 1),
+                 (unsigned long)(fifo & 0x3FFF));
+
+        // TEST 2026-07-13: mem_clk_ctrl has two "force clock on" bits for
+        // the bridge's own FIFO memory (dsi_bridge_mem_clk_force_on bit0,
+        // dsi_mem_clk_force_on bit1), both default 0 — meaning the FIFO
+        // memory clock relies on automatic/dynamic gating that may not
+        // correctly detect activity in our usage pattern (early ECO2
+        // silicon; "force on" workaround bits are a common pattern for
+        // exactly this class of issue). raw_buf_depth sitting permanently
+        // near-full (data arriving, never draining) is consistent with
+        // the output-side FIFO memory not actually being clocked. Forcing
+        // both bits on directly to test.
+        uint32_t mem_clk_before = MIPI_DSI_BRIDGE.mem_clk_ctrl.val;
+        MIPI_DSI_BRIDGE.mem_clk_ctrl.val = 0x3;
+        ESP_LOGW(TAG, "DSI_BRIDGE: mem_clk_ctrl before=0x%lX after=0x%lX (forced both FIFO clocks on)",
+                 (unsigned long)mem_clk_before, (unsigned long)MIPI_DSI_BRIDGE.mem_clk_ctrl.val);
+
+        // Comprehensive dump of remaining unchecked bridge registers:
+        // dpi_lcd_ctl (dpishutdn/dpicolorm/dpiupdatecfg — real standard DPI
+        // protocol control signals; dpishutdn=1 would tell the display to
+        // stop processing, exactly matching our symptom if unexpectedly
+        // set), the bridge's own timing registers (should show our real
+        // 720x1920 config, not the 800x480-ish hw defaults, if
+        // mipi_dsi_brg_ll_set_horizontal/vertical_timing() really landed),
+        // credit control (probably irrelevant — comment says "valid only
+        // when dsi_bridge as flow controller", and we use DMA as flow
+        // controller — but confirming), and interrupt raw/status (only has
+        // an underrun bit, checking anyway).
+        ESP_LOGW(TAG, "DSI_BRIDGE dpi_lcd_ctl=0x%lX(shutdn=%lu colorm=%lu updatecfg=%lu) host_ctrl=0x%lX",
+                 (unsigned long)MIPI_DSI_BRIDGE.dpi_lcd_ctl.val,
+                 (unsigned long)(MIPI_DSI_BRIDGE.dpi_lcd_ctl.val & 1),
+                 (unsigned long)((MIPI_DSI_BRIDGE.dpi_lcd_ctl.val >> 1) & 1),
+                 (unsigned long)((MIPI_DSI_BRIDGE.dpi_lcd_ctl.val >> 2) & 1),
+                 (unsigned long)MIPI_DSI_BRIDGE.host_ctrl.val);
+        ESP_LOGW(TAG, "DSI_BRIDGE timing: v_cfg0=0x%lX(vdisp=%lu vtotal=%lu) v_cfg1=0x%lX(vsync=%lu vbank=%lu)",
+                 (unsigned long)MIPI_DSI_BRIDGE.dpi_v_cfg0.val,
+                 (unsigned long)(MIPI_DSI_BRIDGE.dpi_v_cfg0.val & 0xFFF),
+                 (unsigned long)((MIPI_DSI_BRIDGE.dpi_v_cfg0.val >> 16) & 0xFFF),
+                 (unsigned long)MIPI_DSI_BRIDGE.dpi_v_cfg1.val,
+                 (unsigned long)(MIPI_DSI_BRIDGE.dpi_v_cfg1.val & 0xFFF),
+                 (unsigned long)((MIPI_DSI_BRIDGE.dpi_v_cfg1.val >> 16) & 0xFFF));
+        ESP_LOGW(TAG, "DSI_BRIDGE timing: h_cfg0=0x%lX(hdisp=%lu htotal=%lu) h_cfg1=0x%lX(hsync=%lu hbank=%lu)",
+                 (unsigned long)MIPI_DSI_BRIDGE.dpi_h_cfg0.val,
+                 (unsigned long)(MIPI_DSI_BRIDGE.dpi_h_cfg0.val & 0xFFF),
+                 (unsigned long)((MIPI_DSI_BRIDGE.dpi_h_cfg0.val >> 16) & 0xFFF),
+                 (unsigned long)MIPI_DSI_BRIDGE.dpi_h_cfg1.val,
+                 (unsigned long)(MIPI_DSI_BRIDGE.dpi_h_cfg1.val & 0xFFF),
+                 (unsigned long)((MIPI_DSI_BRIDGE.dpi_h_cfg1.val >> 16) & 0xFFF));
+        ESP_LOGW(TAG, "DSI_BRIDGE raw_num_cfg=0x%lX credit_ctl=0x%lX int_raw=0x%lX int_st=0x%lX int_ena=0x%lX dma_req_cfg=0x%lX",
+                 (unsigned long)MIPI_DSI_BRIDGE.raw_num_cfg.val,
+                 (unsigned long)MIPI_DSI_BRIDGE.raw_buf_credit_ctl.val,
+                 (unsigned long)MIPI_DSI_BRIDGE.int_raw.val,
+                 (unsigned long)MIPI_DSI_BRIDGE.int_st.val,
+                 (unsigned long)MIPI_DSI_BRIDGE.int_ena.val,
+                 (unsigned long)MIPI_DSI_BRIDGE.dma_req_cfg.val);
+
+        // Install a real, dedicated CPU-level interrupt handler for the
+        // bridge's own IRQ line — see prv_dsi_bridge_isr() comment above.
+        intr_handle_t brg_intr = NULL;
+        esp_err_t intr_ret = esp_intr_alloc(ETS_DSI_BRIDGE_INTR_SOURCE,
+                ESP_INTR_FLAG_LOWMED, prv_dsi_bridge_isr, NULL, &brg_intr);
+        ESP_LOGW(TAG, "DSI_BRIDGE: esp_intr_alloc(ETS_DSI_BRIDGE_INTR_SOURCE) -> %s",
+                 esp_err_to_name(intr_ret));
     }
 #endif
 
