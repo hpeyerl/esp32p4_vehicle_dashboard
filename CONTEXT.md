@@ -2729,3 +2729,60 @@ LP, lane setup Pi-faithful. Two suspects remain, both hard:
    produce (only 80/53 or 120/79 from the 240MHz PLL w/ integer dividers).
    If the HX8399 GIP is strict about refresh, we're structurally stuck.
 Committed ff31d43.
+
+## 2026-07-13 (Opus): Pi5 A/B proves the panel works at the P4's exact config — clock rate + lane count exonerated; fault pinned to the P4 DSI host
+
+Definitive experiment. SSH'd to the user's working Pi5 (pi5.local, kernel
+6.18.34+rpt-rpi-2712) and ran THIS panel at the P4's configuration:
+- Edited the panel driver's hardcoded mode clock
+  (drivers/gpu/drm/panel/panel-waveshare-dsi-v2.c, ws_panel_12_3_a_4lane_mode,
+  `.clock = 95000` -> `80000`), rebuilt just that module against
+  linux-headers-rpi-2712.
+- GOTCHA: the panel module is in the INITRAMFS (auto_initramfs=1), so a
+  /lib/modules swap silently does nothing until you add the modules to
+  /etc/initramfs-tools/modules and `update-initramfs -u` (writes
+  /boot/firmware/initramfs_2712). First reboot still showed 95MHz until this.
+- Result: dmesg `Nominal Byte clock 60000000 DPI clock 80000000`,
+  `rp1dsi_bind succeeded`, **panel displays fine at 80MHz / ~53Hz.**
+
+So the P4's inability to synthesize 95MHz (only 80 or 120 from the 240MHz
+PLL) is NOT the problem — the panel is perfectly happy at 80MHz. And per
+the user's schematic the Pi connector is 2-lane, so the panel runs at
+2-lane AND 80MHz = the P4's exact config, and works. **Clock rate and lane
+count are both exonerated.** (Pi dmesg reported lanes:4 / byte clock 60MHz
+which computes as 4-lane; user is certain the connector is physically
+2-lane — trust the schematic, do not relitigate.)
+
+DRM mode on the Pi matches ours exactly: `"720x1920": 53 80000 720 730 740
+752 1920 1984 2002 2006`, RGB888 (XR24 fb), flags 0xc11 (VIDEO|HSE|
+NON-CONTINUOUS|LPM). Everything we can configure is identical to the
+working Pi.
+
+Also this session: scoped the Pi's working HS clock (differential M=Ch1-Ch2
+on a TDS640A, 2GS/s, 5ns/div) — a clean but visibly NOISY ~240MHz sine,
+~428mV. "Noisy but works" => the panel tolerates an imperfect eye =>
+signal integrity was never the P4's problem (already backed by the 640Mbps
+low-rate test being dark). And the 2-lane SETMIPI (0xBA) experiment: even
+with the bounded-FIFO HAL patch, sending 0xBA BREAKS the P4's LP command
+channel (every later cmd times out) — the Pi never sends 0xBA (uses
+0xBB=0x01, already in our init). Rejected.
+
+**Conclusion: the fault is 100% in the P4's DSI host (Synopsys DesignWare)
+low-level behavior** — either D-PHY timing (not inspectable; rp1-dsi doesn't
+expose it either) or a video-mode quirk below our config. Built a
+diagnostic (flag DSI_PANEL_ERR_READBACK): after HS video streams, switch to
+command mode and read the panel's RDNUMPE (DSI error count, 0x05) + RDDPM +
+RDDSDR. If RDNUMPE climbed from its 0 init-baseline => P4 packets arrive
+CORRUPTED (scope the eye next); if still 0 => panel gets CLEAN packets but
+won't paint them => protocol/DesignWare quirk => ESP-IDF version jump is
+the likely fix (we already hand-patched the shadow bug; upstream #18111 /
+#18083 show ongoing 5.5.x DSI fixes). Built + flashed pending the P4 being
+reconnected (it was disconnected at end of session).
+
+Pi left AT 80MHz as a live reference (user's choice); original module backed
+up as .../panel/panel-waveshare-dsi-v2.ko.xz.ORIG95MHz. To restore 95MHz:
+copy the backup over, depmod -a, update-initramfs -u, reboot.
+
+P4 resting config: 80MHz DPI (WS_DPI_CLK_MHZ=75->80), 960Mbps/lane, RGB888
+VPG, non-burst/non-continuous, exact Pi init via DSI_COMPONENT_BYPASS,
+shadow fix + bounded-FIFO HAL patch enabled.

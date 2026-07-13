@@ -138,15 +138,16 @@ static const char *TAG = "ws_disp";
 // timing ratio, and sits in the proven-working range of a 2-lane Pi DSI0
 // driving this same panel (~725-1086 Mbps/lane). Pi uses 4 lanes on DSI1 at
 // only ~540 Mbps/lane; we need ~2x per lane since only 2 lanes are wired.
-// 2026-07-13 (Opus): 960 -> 1140 to match the user's KNOWN-WORKING Pi 2-lane
-// DSI0 rate for this exact panel (95MHz pixel clock * 24bpp / 2 lanes = 1140
-// Mbps/lane => 570MHz HS clock). Cable is exonerated (correct pinout, clock
-// reaches panel full-amplitude) and every other transmit variable matches
-// the Pi, so the last config difference is the HS clock rate the panel's DSI
-// PLL locks to. Long shot (960 is only ~16% off, likely within lock range),
-// but it's the exact rate the panel is proven to accept on the Pi. Well
-// within the P4 D-PHY range (we ran 1500 earlier).
-#define WS_DSI_LANE_MBPS      1140
+// 2026-07-13 (Opus): LOW-RATE SI TEST. 1140 was dark. Drop to 640 Mbps/lane
+// (= 80MHz DPI * 16bpp / 2 lanes, the non-burst-matched rate for RGB565) to
+// test the signal-integrity hypothesis WITHOUT a scope: a lower bit rate
+// opens the HS eye, so if the panel suddenly locks at 640 while 960/1140
+// stay dark, SI on the 2-layer flex is the culprit (=> cable respin). If 640
+// is also dark, SI is ruled out and it's the clock/refresh wall. NOTE: 640
+// requires RGB565 (see DSI_VPG_TEST color_coding change to 0/16-bit); RGB888
+// needs >=960. 2026-07-13: 640 was dark (SI ruled out); now 960 to pair with
+// the 120MHz DPI refresh test (960 = 120*16/2, non-burst RGB565 matched).
+#define WS_DSI_LANE_MBPS      960
 // 2026-07-12 BREAKTHROUGH: was 75 (see below for the full prior history)
 // — paired with WS_DSI_LANE_MBPS=1500 above, this is the first DPI
 // clock/lane-rate combination all session that produces real HS bursts
@@ -161,7 +162,7 @@ static const char *TAG = "ws_disp";
 // ~63Hz, consistent with the 60Hz datasheet spec. 80MHz here (with the
 // new 1500Mbps lane rate) gives ~53Hz — within the same ballpark as
 // both the datasheet spec and the Pi5 reference.
-#define WS_DPI_CLK_MHZ        75   // TEMPORARY: re-check pattern-gen (GDMA-independent) bursting at 75 vs 80, with lane rate held at 1500
+#define WS_DPI_CLK_MHZ        75   // ->80MHz actual (240/3). Closest the P4 PLL can get to the panel's native 95MHz/63Hz => ~53Hz. RESTING config after the full sweep (both 53Hz & 79Hz dark, all lane rates dark, RGB565 & RGB888 dark). See Pi-clock test in CONTEXT.md.
 #define WS_HSYNC_PULSE_WIDTH  10
 #define WS_HSYNC_BACK_PORCH   12
 #define WS_HSYNC_FRONT_PORCH  10
@@ -1252,6 +1253,30 @@ static esp_err_t prv_panel_init(void)
              (unsigned long)((MIPI_DSI_HOST.phy_status.val >> 7) & 1),
              (unsigned long)MIPI_DSI_HOST.vid_pkt_status.val);
 
+#ifdef DSI_PANEL_ERR_READBACK
+    // 2026-07-13 (Opus): after real HS video has streamed, ask the PANEL how
+    // it's receiving the P4's stream. RDNUMPE (0x05) = panel's DSI error
+    // count. At init (LP, pre-video) it read 0x00. Read it again now, after
+    // HS video: if it CLIMBED, the P4's HS packets arrive corrupted (D-PHY/
+    // signal/timing) -> scope the eye. If still 0x00, the panel receives
+    // clean packets but doesn't paint them (protocol/format/DesignWare quirk)
+    // -> ESP-IDF version jump. Needs the panel on the P4 to be meaningful.
+    esp_rom_delay_us(300000);                     // ~15 frames of real video
+    MIPI_DSI_HOST.mode_cfg.cmd_video_mode = 1;     // command mode for BTA reads
+    esp_rom_delay_us(3000);
+    {
+        uint8_t numpe = 0xAA, rddpm = 0xAA, rddsdr = 0xAA;
+        esp_lcd_panel_io_rx_param(io, 0x05, &numpe, 1);   // RDNUMPE
+        esp_lcd_panel_io_rx_param(io, 0x0A, &rddpm, 1);    // RDDPM
+        esp_lcd_panel_io_rx_param(io, 0x0F, &rddsdr, 1);   // RDDSDR
+        ESP_LOGW(TAG, "PANEL_ERR_READBACK after HS video: RDNUMPE=0x%02X RDDPM=0x%02X RDDSDR=0x%02X "
+                 "(RDNUMPE>0 => P4 HS packets CORRUPTED [scope]; =0 => clean but unpainted [IDF version])",
+                 numpe, rddpm, rddsdr);
+    }
+    MIPI_DSI_HOST.mode_cfg.cmd_video_mode = 0;      // resume video
+    esp_rom_delay_us(30000);
+#endif
+
 #ifdef DSI_VPG_TEST
     // 2026-07-12 (Opus) decisive panel-lock test with the panel's EXACT
     // required DSI mode, from the authoritative Waveshare/Pi driver
@@ -1262,7 +1287,7 @@ static esp_err_t prv_panel_init(void)
     // panel shows bars -> mode/clock/format are right and I do the full
     // RGB888 LVGL refactor. If not -> keep debugging the DSI mode.
     MIPI_DSI_HOST.vid_mode_cfg.vid_mode_type = 1;        // non-burst sync EVENTS (was burst=2)
-    MIPI_DSI_HOST.dpi_color_coding.dpi_color_coding = 5; // 24-bit RGB888 (was 16-bit RGB565)
+    MIPI_DSI_HOST.dpi_color_coding.dpi_color_coding = 5; // 24-bit RGB888 (Pi-faithful; 960Mbps = 80MHz*24/2 non-burst matched)
     MIPI_DSI_HOST.lpclk_ctrl.val = 0x3;                  // AUTO clock lane = NON-continuous (undo the continuous-HS force)
     esp_lcd_dpi_panel_set_pattern(s_panel, MIPI_DSI_PATTERN_BAR_VERTICAL);
     esp_rom_delay_us(1000);
