@@ -2676,3 +2676,56 @@ DSI_SHADOW_FIX, DSI_VPG_TEST, HX8399_SELFTEST_RETRIGGER. The forced
 continuous-clock-lane hack (lpclk=0x1) in DSI_BRIDGE_STATUS_TEST is now
 overridden to 0x3 (non-continuous) inside the VPG block — for the real
 fix, set it to AUTO (0x3) or remove the force entirely.
+
+## 2026-07-13 (Opus): cable exonerated by scope+buzz-out; 2-lane SETMIPI rejected; lane rate -> 1140 (awaiting visual test)
+
+Followed the "physical HS-path" conclusion from the shadow-fix session.
+Parsed the custom fabbed FPC adapter's JLC package (EasyEDA
+`P4Nano_to_12.3_FPC`) — the `FlyingProbeTesting.json` gave a full net map
+(28 pads, CLK/D0/D1 pairs + I2C + 3V3 + GND). Then the user physically
+buzzed the ASSEMBLED cable end-to-end.
+
+**Cable is CORRECT and exonerated:**
+- Every pair P->P / N->N, using D0 as the known-good polarity ruler (LP
+  works through D0, so its polarity must be right): CLK P4-5->disp-15 /
+  P4-6->disp-14, D1 P4-2->disp-18 / P4-3->disp-17, D0 P4-8->disp-21 /
+  P4-9->disp-20, plus SCL/SDA/3V3/GND.
+- **Numbering gotcha (caused a false "swap" alarm):** the display counts
+  from its own silkscreen "1", which is the CM4IO/Pi5-CSI0 pinout REVERSED
+  (mated flipped) => display-silkscreen pin X = CM4IO pin (23-X). So on the
+  DISPLAY silkscreen: CLK_P=14, CLK_N=15, D1_P=17/N=18, D0_P=20/N=21,
+  SCL=3, SDA=2, 3V3=1. My earlier buzz table used CM4IO numbers; converting
+  and calibrating against D0 resolved it — no swap.
+- Scoped CLK at display pin 15 (Tek, 25us/div envelope): full ~1V
+  amplitude, per-line HS-burst envelope IDENTICAL to the P4 end. So the
+  clock crosses the 58mm 2-layer flex without gross loss and arrives at the
+  panel input.
+
+**2-lane SETMIPI (0xBA=0x01) tested and REJECTED.** P4 has only 2 lanes
+wired, so the panel must be in 2-lane mode; tried forcing it. Re-enabled
+the bounded-FIFO `mipi_dsi_hal` patch (scripts/patch_espidf_builder.py,
+`_MIPI_DSI_HAL_PATCH_ENABLED=True`) so 0xBA wouldn't hang. Result: sending
+0xBA BREAKS the DSI LP command channel entirely — every subsequent LP
+command hits "cmd FIFO never cleared" (~1s each) until WDT. The Pi driver
+never sends 0xBA for this panel; it sends 0xBB=0x01 (already in our Pi init
+sequence). Removed 0xBA; lane/mode is already handled the working-Pi way.
+
+**Lane rate 960 -> 1140** to match the user's known-working Pi 2-lane DSI0
+rate exactly (95MHz pixel * 24bpp / 2 lanes = 1140 Mbps/lane => 570MHz HS
+clock, the clock the panel is proven to lock to on the Pi). Flashed; boots
+clean, panel healthy (RDDPM=0x9D), HS video transmitting (phy=0x1529,
+hline_act rescaled to 1337). **User could not watch the screen 2026-07-13
+— reset and look next session.** Long shot (960 was ~16% off, likely in
+lock range) but it's the last config difference from the proven Pi setup.
+
+**Where it stands — everything software/wiring eliminated:** shadow bug
+fixed (HS transmits), cable correct + signal reaches panel, transmit side
+fully matches the Pi (mode/format/rate/EoTp/VC/timing), panel healthy on
+LP, lane setup Pi-faithful. Two suspects remain, both hard:
+1. HS signal-integrity eye on the 2-layer flex (envelope fine, actual
+   480/570MHz eye never seen; needs ~2ns/div fast-scope). Fix if bad =
+   cable respin (4-layer/impedance-controlled/shorter), not firmware.
+2. The panel's native 95MHz/63Hz pixel clock, which the P4 PLL cannot
+   produce (only 80/53 or 120/79 from the 240MHz PLL w/ integer dividers).
+   If the HX8399 GIP is strict about refresh, we're structurally stuck.
+Committed ff31d43.
