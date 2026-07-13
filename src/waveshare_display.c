@@ -36,7 +36,9 @@
 #include "hat_pins.h"
 #include "soc/mipi_dsi_host_struct.h"
 #include "soc/mipi_dsi_bridge_struct.h"
+#include "soc/hp_sys_clkrst_struct.h"
 #include "soc/interrupts.h"
+#include "esp_rom_sys.h"
 #include "esp_intr_alloc.h"
 #include <string.h>
 
@@ -125,7 +127,18 @@ static const char *TAG = "ws_disp";
 // isolation-test log). Neither value alone (tested independently)
 // produced any change — it's the dpi_clock/lane_bit_rate RATIO that
 // matters, not either value in isolation.
-#define WS_DSI_LANE_MBPS      1500
+// 2026-07-12 (Opus) REVISED 1500 -> 960. 1500 was chosen only because it
+// was the value that made phy_status burst — but that "burst" was really
+// unblocked by the DSI_SHADOW_FIX (host active timing was 0), NOT the lane
+// rate. And 1500 Mbps/lane EXCEEDS the HX8399-C's max receiver rate
+// (datasheet: 4Gbps/4lanes = 1.0 Gbps/lane absolute max), so the panel
+// physically can't lock to it -> black despite perfect transmission.
+// 960 Mbps/lane is legal (<=1000 max), covers the ~640 Mbps/lane bandwidth
+// floor at 80MHz DPI/16bpp/2-lane with headroom, gives a clean 960/80/8=1.5
+// timing ratio, and sits in the proven-working range of a 2-lane Pi DSI0
+// driving this same panel (~725-1086 Mbps/lane). Pi uses 4 lanes on DSI1 at
+// only ~540 Mbps/lane; we need ~2x per lane since only 2 lanes are wired.
+#define WS_DSI_LANE_MBPS      960
 // 2026-07-12 BREAKTHROUGH: was 75 (see below for the full prior history)
 // — paired with WS_DSI_LANE_MBPS=1500 above, this is the first DPI
 // clock/lane-rate combination all session that produces real HS bursts
@@ -185,66 +198,64 @@ static bool IRAM_ATTR prv_dpi_trans_done_cb(esp_lcd_panel_handle_t panel,
 // This overrides the component's built-in default init sequence so we
 // get the exact Waveshare 12.3" panel calibration (4-lane, 720×1920).
 static const hx8399_lcd_init_cmd_t s_hx8399_init_cmds[] = {
-    // Manufacturer command unlock — identifies controller as HX8399-C
-    {0xB9, (uint8_t[]){0x83, 0x10, 0x2E},                                3,   0},
-    // SETPOWER
-    {0xB1, (uint8_t[]){0x7C, 0x25, 0x25, 0x8F, 0x8F, 0x4C, 0x87,
-                       0x62, 0x1A, 0x7C, 0x7C, 0x4E, 0x4E},            13,   0},
-    // SETDISP
-    {0xB2, (uint8_t[]){0x00, 0x02, 0x00, 0x90, 0x14, 0x0C, 0x02,
-                       0x0C, 0x02, 0x37},                               10,   0},
-    // SETCYC
-    {0xB4, (uint8_t[]){0x00, 0xFF, 0x02, 0xC0, 0x02, 0xC0, 0x00,
-                       0x00, 0x08, 0x00, 0x04, 0x08, 0x00, 0x04,
-                       0x04, 0xBF, 0x00, 0x00, 0x00, 0x00, 0x00,
-                       0x00, 0x01, 0x01},                               24,   0},
-    // SETVCOM
-    {0xB6, (uint8_t[]){0xAF, 0xAF},                                      2,   0},
-    // SETGIP0
-    {0xD3, (uint8_t[]){0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
-                       0x10, 0x32, 0x10, 0x00, 0x00, 0x00, 0x00,
-                       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                       0x00, 0x07, 0x07, 0x07, 0x07, 0x57, 0x07,
-                       0x07, 0x07, 0x07, 0x07},                         32,   0},
-    // SETGIP1
-    {0xD5, (uint8_t[]){0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18,
-                       0x18, 0x21, 0x20, 0x18, 0x18, 0x18, 0x18,
-                       0x18, 0x18, 0x18, 0x18, 0x19, 0x19, 0x18,
-                       0x18, 0x02, 0x03, 0x00, 0x01, 0x06, 0x07,
-                       0x04, 0x05, 0x18, 0x18, 0x18, 0x18, 0x18,
-                       0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18,
-                       0x18, 0x18},                                      44,   0},
-    // SETGIP2
-    {0xD6, (uint8_t[]){0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18,
-                       0x18, 0x20, 0x21, 0x18, 0x18, 0x18, 0x18,
-                       0x18, 0x18, 0x18, 0x18, 0x19, 0x19, 0x18,
-                       0x18, 0x05, 0x04, 0x07, 0x06, 0x01, 0x00,
-                       0x03, 0x02, 0x18, 0x18, 0x18, 0x18, 0x18,
-                       0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18,
-                       0x18, 0x18},                                      44,   0},
-    // SETGAMMA
-    {0xE0, (uint8_t[]){0x00, 0x14, 0x1F, 0x35, 0x3F, 0x3F, 0x37,
-                       0x48, 0x07, 0x0C, 0x0E, 0x11, 0x13, 0x12,
-                       0x14, 0x0F, 0x17, 0x00, 0x14, 0x1F, 0x35,
-                       0x3F, 0x3F, 0x37, 0x48, 0x07, 0x0C, 0x0E,
-                       0x11, 0x13, 0x12, 0x14, 0x0F, 0x17},             34,   0},
-    // NOTE: SETMIPI (0xBA) is sent by esp_lcd_hx8399 component based on lane_num.
-    // Do NOT include it here — the component handles lane configuration.
-    // SETPANEL — BGR order
-    {0xCC, (uint8_t[]){0x08},                                            1,   0},
-    // SETOFFSET
-    {0xC6, (uint8_t[]){0xFF, 0xF9},                                      2,   0},
-    // NOTE: Sleep out (0x11) is sent by the esp_lcd_hx8399 component before
-    // this array runs. Display ON (0x29) is sent HERE, not via the later
-    // esp_lcd_panel_disp_on_off() call — panel_hx8399_init() calls
-    // hx8399->init(panel) (which starts the DPI video stream) immediately
-    // after this array finishes. Once video streaming begins, this board's
-    // DSI host never reopens a command-FIFO window for further DBI commands,
-    // so disp_on_off() hangs forever (ESP-IDF's mipi_dsi_hal_host_gen_write_dcs_command
-    // has an unconditional, timeout-free spin-wait). Sending DISPON before
-    // hx8399->init(panel) avoids the problem entirely.
-    {0xB9, (uint8_t[]){0x00},                                            1,   0},   // close manufacturer page
-    {0x29, NULL,                                                         0,  10},   // Display ON
+    // 2026-07-12 (Opus): REPLACED the previous generic HX8399-C init with the
+    // EXACT sequence from the working Raspberry Pi driver for THIS panel
+    // (raspberrypi/linux rpi-6.18.y drivers/gpu/drm/panel/panel-waveshare-
+    // dsi-v2.c :: ws_panel_12_3_a_4lane_init, used by ws_panel_12_3_inch_a_
+    // 4lane_desc). The old sequence was a different/generic HX8399 init whose
+    // GIP/power/timing values do not match this panel — the panel ACKed
+    // commands but never displayed. This bank-select-based sequence (0xBD
+    // bank selects, 0xD1/0xBE/0xB1/0xB4/0xD3/0xD5/0xD6/0xD8...) is what the
+    // panel actually needs. NOTE: the esp_lcd_hx8399 component still sends a
+    // fixed preamble (SLPOUT, MADCTL, COLMOD, SETMIPI 0xBA) before this array;
+    // 0xBA is not in the Pi sequence and may need removing (component bypass)
+    // if this alone doesn't display.
+    {0xB9, (uint8_t[]){0x83, 0x10, 0x2E}, 3, 0},
+    {0xE9, (uint8_t[]){0xCD}, 1, 0},
+    {0xBB, (uint8_t[]){0x01}, 1, 0},
+    {0xE9, (uint8_t[]){0x00}, 1, 0},
+    {0xD1, (uint8_t[]){0x67, 0x2C, 0xFF, 0x05}, 4, 0},
+    {0xBE, (uint8_t[]){0x11, 0x96, 0x89}, 3, 0},
+    {0xD9, (uint8_t[]){0x04, 0x03, 0x04}, 3, 0},
+    {0xB1, (uint8_t[]){0x10, 0xFA, 0xAF, 0xAF, 0x33, 0x33, 0xB1, 0x4D, 0x2F, 0x36, 0x36, 0x36, 0x36, 0x22, 0x21, 0x15, 0x00}, 17, 0},
+    {0xB2, (uint8_t[]){0x00, 0xD0, 0x27, 0x80, 0x00, 0x14, 0x40, 0x2C, 0x32, 0x02, 0x00, 0x00, 0x15, 0x20, 0xD7, 0x00}, 16, 0},
+    {0xB4, (uint8_t[]){0x98, 0xA0, 0x01, 0x01, 0x98, 0xA0, 0x68, 0x50, 0x01, 0xC7, 0x01, 0x58, 0x00, 0xFF, 0x00, 0xFF}, 16, 0},
+    {0xB6, (uint8_t[]){0x4D, 0x4D, 0xE3}, 3, 0},
+    {0xBF, (uint8_t[]){0xFC, 0x85, 0x80}, 3, 0},
+    {0xD2, (uint8_t[]){0x33, 0x33}, 2, 0},
+    {0xD3, (uint8_t[]){0x00, 0x00, 0x00, 0x00, 0x64, 0x04, 0x00, 0x08, 0x08, 0x27, 0x27, 0x22, 0x2F, 0x15, 0x15, 0x04, 0x04, 0x32, 0x10, 0x13, 0x00, 0x13, 0x32, 0x10, 0x1F, 0x00, 0x02, 0x32, 0x17, 0xFD, 0x00, 0x10, 0x00, 0x00, 0x20, 0x30, 0x01, 0x55, 0x21, 0x38, 0x01, 0x55, 0x0F}, 43, 0},
+    {0xE0, (uint8_t[]){0x00, 0x0C, 0x1A, 0x23, 0x2B, 0x4F, 0x64, 0x69, 0x6C, 0x64, 0x77, 0x77, 0x76, 0x80, 0x79, 0x7E, 0x85, 0x9A, 0x97, 0x4D, 0x56, 0x64, 0x70, 0x00, 0x0C, 0x1A, 0x23, 0x2B, 0x4F, 0x64, 0x69, 0x6C, 0x64, 0x77, 0x77, 0x76, 0x80, 0x79, 0x7E, 0x85, 0x9A, 0x97, 0x4D, 0x56, 0x64, 0x76}, 46, 0},
+    {0xBD, (uint8_t[]){0x01}, 1, 0},
+    {0xB1, (uint8_t[]){0x01, 0x9B, 0x01, 0x31}, 4, 0},
+    {0xCB, (uint8_t[]){0x80, 0x36, 0x12, 0x16, 0xC0, 0x28, 0x40, 0x84, 0x22}, 9, 0},
+    {0xD3, (uint8_t[]){0x01, 0x00, 0xFC, 0x00, 0x00, 0x11, 0x10, 0x00, 0x0E, 0x00, 0x01}, 11, 0},
+    {0xBD, (uint8_t[]){0x02}, 1, 0},
+    {0xB4, (uint8_t[]){0x4E, 0x00, 0x33, 0x11, 0x33, 0x88}, 6, 0},
+    {0xBF, (uint8_t[]){0xF2, 0x00, 0x02}, 3, 0},
+    {0xBD, (uint8_t[]){0x00}, 1, 0},
+    {0xC0, (uint8_t[]){0x23, 0x23, 0x22, 0x11, 0xA2, 0x17, 0x00, 0x80, 0x00, 0x00, 0x08, 0x00, 0x63, 0x63}, 14, 0},
+    {0xC6, (uint8_t[]){0xF9}, 1, 0},
+    {0xC7, (uint8_t[]){0x30}, 1, 0},
+    {0xC8, (uint8_t[]){0x00, 0x04, 0x04, 0x00, 0x00, 0x82, 0x13, 0x01}, 8, 0},
+    {0xD0, (uint8_t[]){0x07, 0x04, 0x05}, 3, 0},
+    {0xD5, (uint8_t[]){0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x21, 0x20, 0x21, 0x20, 0x01, 0x00, 0x03, 0x02, 0x05, 0x04, 0x07, 0x06, 0x1A, 0x1A, 0x1A, 0x1A, 0x9A, 0x9A, 0x9A, 0x9A, 0x18, 0x18, 0x18, 0x18, 0x21, 0x20, 0x21, 0x20, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18}, 44, 0},
+    {0xD6, (uint8_t[]){0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x20, 0x21, 0x20, 0x21, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x1A, 0x1A, 0x1A, 0x1A, 0x1A, 0x1A, 0x1A, 0x1A, 0x18, 0x18, 0x18, 0x18, 0x20, 0x21, 0x20, 0x21, 0x98, 0x98, 0x98, 0x98, 0x98, 0x98, 0x98, 0x98, 0x98, 0x98}, 44, 0},
+    {0xBD, (uint8_t[]){0x01}, 1, 0},
+    {0xE7, (uint8_t[]){0x00, 0x34, 0x01, 0x88, 0x0E, 0xBE, 0x0F}, 7, 0},
+    {0xBD, (uint8_t[]){0x00}, 1, 0},
+    {0xC2, (uint8_t[]){0x43, 0xFF, 0x10}, 3, 0},
+    {0xCC, (uint8_t[]){0x02}, 1, 0},
+    {0xBD, (uint8_t[]){0x03}, 1, 0},
+    {0xB2, (uint8_t[]){0x80}, 1, 0},
+    {0xBD, (uint8_t[]){0x00}, 1, 0},
+    {0xD8, (uint8_t[]){0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0x80, 0x2A, 0xAA, 0xAA, 0xAA, 0xAA, 0x80, 0x2A, 0xAA, 0xAA, 0xAA}, 24, 0},
+    {0xBD, (uint8_t[]){0x01}, 1, 0},
+    {0xD8, (uint8_t[]){0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA}, 12, 0},
+    {0xBD, (uint8_t[]){0x02}, 1, 0},
+    {0xD8, (uint8_t[]){0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xF0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xF0}, 12, 0},
+    {0xBD, (uint8_t[]){0x00}, 1, 0},
+    {0x11, NULL, 0, 120},
+    {0x29, NULL, 0, 20},
 };
 
 // ── LVGL flush callback ───────────────────────────────────────────────────
@@ -324,18 +335,105 @@ static void prv_lvgl_flush_cb(lv_display_t *disp,
         if (flush_count == 5) {
             uint32_t burst_seen = 0, full_seen = 0;
             uint32_t sample_count = 100000;
+            // 2026-07-12 (Opus): also tight-poll the BRIDGE raw_buf_depth to
+            // settle (A) vs (B): is the bridge DPI scan-out engine running
+            // at all? If scan-out drains raw_buf during active lines, depth
+            // must dip LOW at least sometimes (min near 0). If scan-out is
+            // stalled, DMA fills to the flow-control threshold and depth
+            // stays pegged high (min ~= max ~= 800-1024), never draining.
+            // Zero underruns + a permanently-full raw buffer already points
+            // to a stalled scan-out; this makes it definitive.
+            uint32_t rbd_min = 0xFFFFFFFF, rbd_max = 0, below256 = 0, below64 = 0;
             for (uint32_t i = 0; i < sample_count; i++) {
                 uint32_t phy = MIPI_DSI_HOST.phy_status.val;
                 uint32_t vid = MIPI_DSI_HOST.vid_pkt_status.val;
+                uint32_t rbd = MIPI_DSI_BRIDGE.fifo_flow_status.val & 0x3FFF;
                 if (((phy >> 2) & 1) == 0 || ((phy >> 4) & 1) == 0 || ((phy >> 7) & 1) == 0) {
                     burst_seen++;
                 }
                 if (((vid >> 17) & 1) == 1) {  // dpi_buff_pld_full
                     full_seen++;
                 }
+                if (rbd < rbd_min) rbd_min = rbd;
+                if (rbd > rbd_max) rbd_max = rbd;
+                if (rbd < 256) below256++;
+                if (rbd < 64)  below64++;
             }
             ESP_LOGW(TAG, "DSI_TIGHT_POLL: %lu samples, burst_seen=%lu times, buffer_full_seen=%lu times",
                      (unsigned long)sample_count, (unsigned long)burst_seen, (unsigned long)full_seen);
+            ESP_LOGW(TAG, "DSI_TIGHT_POLL raw_buf_depth: min=%lu max=%lu samples_below256=%lu below64=%lu "
+                     "(min stays high => scan-out STALLED; min dips low => scan-out RUNNING)",
+                     (unsigned long)rbd_min, (unsigned long)rbd_max,
+                     (unsigned long)below256, (unsigned long)below64);
+        }
+#endif
+#ifdef DSI_BRIDGE_KICK_TEST
+        // 2026-07-12 (Opus): the tight poll proved the bridge DPI scan-out
+        // is STALLED (raw_buf pegged >=766/1024, never drains; zero
+        // underruns; vid_pkt always empty) despite dpi_en=1, DPI clock
+        // running, config committed, data present. Hypothesis: the init-
+        // time enable_dpi_output() didn't "take" (enabled too early in the
+        // sequence, before the panel/DMA/clock chain was fully live). Test
+        // a fresh RE-KICK during live rendering: toggle dpi_en off->on with
+        // a config-commit each time (exactly what set_pattern(NONE) does to
+        // re-enable the bridge). If raw_buf starts draining / vid_pkt fills
+        // / data lanes burst on flushes AFTER this, the fix is a re-enable
+        // after full bring-up. Fires once at flush#8.
+        // dpi_en off->on re-kick already tested NEGATIVE (2026-07-12): a
+        // fresh re-enable during live rendering does not start the scan-out,
+        // so it is NOT a sequencing/too-early-enable problem. Pivot: upstream
+        // esp-idf #18111 reports this exact symptom (RGB565 blank, self-check
+        // works) and fingers the RGB565 pixel format specifically. Test that
+        // variable CHEAPLY without the full LVGL/PPA/framebuffer RGB888
+        // refactor: force pixel_type.raw_type to a non-565 value during live
+        // rendering + commit. Colors will be garbage (RGB565 bytes misread),
+        // but if the SCAN-OUT ENGINE starts (raw_buf drains, vid_pkt fills,
+        // data lanes burst on later flushes) that localizes the stall to the
+        // RGB565 (raw_type=2) path exactly. Sweeps 0(RGB888)/1(RGB666) at
+        // flush 8/16; flush logs 9-30 show raw_buf_depth so drain is visible.
+        // DISCRIMINATOR (2026-07-12 Opus): settle A(scan-out stalled) vs
+        // B(scan-out runs, host doesn't transmit). raw_buf oscillates ~766-
+        // 1021 (range ~= dma_burst_len 256) around the almost-empty
+        // threshold (1024-256=768). That oscillation implies SOMETHING
+        // drains ~a burst periodically. Test: DISABLE dpi_en and HOLD it off
+        // (stop scan-out only; the framebuffer->bridge GDMA keeps running).
+        //  - If scan-out WAS draining (B): DMA now has no consumer -> raw_buf
+        //    pegs at ~1023 and STICKS (oscillation stops, stuck at max).
+        //  - If scan-out was already dead (A): nothing changes, raw_buf keeps
+        //    its ~766-1021 behavior.
+        // Sample tightly right after, then per-flush logs 9-30 show the hold.
+        // THE FIX TEST (2026-07-12 Opus): the Host's ACTIVE video timing
+        // registers (vid_*_act) are all ZERO while the config regs are
+        // correct -> config was never transferred to the active/shadow set,
+        // so the packetizer runs with vactive=0/pkt_size=0 and emits nothing.
+        // shadow_ctrl=0 (vid_shadow_en=0, never requested). Force a shadow
+        // load: enable shadow, pulse the request, and check whether the _act
+        // regs populate AND the Host starts transmitting (data lanes burst,
+        // vid_pkt fills, raw_buf drain pattern changes).
+        if (flush_count == 8) {
+            MIPI_DSI_HOST.vid_shadow_ctrl.val = 0x1;        // vid_shadow_en=1
+            esp_rom_delay_us(500);
+            MIPI_DSI_HOST.vid_shadow_ctrl.val = 0x101;      // en=1 + vid_shadow_req=1 (load shadow)
+            esp_rom_delay_us(5000);
+            // restart the video SM so it re-samples the now-valid _act timing:
+            // toggle to command mode and back to video mode.
+            MIPI_DSI_HOST.mode_cfg.cmd_video_mode = 1;       // command mode (video SM off)
+            esp_rom_delay_us(2000);
+            MIPI_DSI_HOST.mode_cfg.cmd_video_mode = 0;       // video mode (SM restarts w/ valid timing)
+            esp_rom_delay_us(20000);                         // ~1 frame @ 53Hz
+            ESP_LOGW(TAG, "DSI_SHADOW_LOAD: shadow_ctrl=0x%lX now. vid_act pkt_size=%lu hline=%lu vactive=%lu mode=0x%lX",
+                     (unsigned long)MIPI_DSI_HOST.vid_shadow_ctrl.val,
+                     (unsigned long)MIPI_DSI_HOST.vid_pkt_size_act.val,
+                     (unsigned long)MIPI_DSI_HOST.vid_hline_time_act.val,
+                     (unsigned long)MIPI_DSI_HOST.vid_vactive_lines_act.val,
+                     (unsigned long)MIPI_DSI_HOST.vid_mode_cfg_act.val);
+            ESP_LOGW(TAG, "DSI_SHADOW_LOAD: phy=0x%08lX(clkstop=%lu d0stop=%lu d1stop=%lu) vid_pkt=0x%08lX raw_buf=%lu",
+                     (unsigned long)MIPI_DSI_HOST.phy_status.val,
+                     (unsigned long)((MIPI_DSI_HOST.phy_status.val >> 2) & 1),
+                     (unsigned long)((MIPI_DSI_HOST.phy_status.val >> 4) & 1),
+                     (unsigned long)((MIPI_DSI_HOST.phy_status.val >> 7) & 1),
+                     (unsigned long)MIPI_DSI_HOST.vid_pkt_status.val,
+                     (unsigned long)(MIPI_DSI_BRIDGE.fifo_flow_status.val & 0x3FFF));
         }
 #endif
         if (flush_count <= 30) {
@@ -707,6 +805,36 @@ static esp_err_t prv_panel_init(void)
     };
     panel_cfg.vendor_config = &vendor_cfg;
 
+#ifdef DSI_COMPONENT_BYPASS
+    // 2026-07-12 (Opus): BYPASS the esp_lcd_hx8399 component's init. The
+    // component sends a fixed preamble the real panel does NOT want:
+    // close-page, SLPOUT (BEFORE config), MADCTL, COLMOD, then SETMIPI
+    // (0xBA) with a lane byte. The authoritative Pi driver
+    // (panel-waveshare-dsi-v2.c) never sends 0xBA at all and does config-
+    // then-SLPOUT. A wrong/partial 0xBA likely mis-programs the panel's DSI
+    // receiver PLL so it can't lock to our HS clock. Here we create the DPI
+    // panel directly and drive the EXACT Pi sequence (s_hx8399_init_cmds,
+    // which now ends with its own SLPOUT+DISPON) over the DBI IO in command
+    // mode, with no preamble and no 0xBA.
+    (void)panel_cfg; (void)vendor_cfg;
+    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_dpi(s_dsi_bus, &dpi_cfg, &s_panel),
+                        TAG, "DPI panel create failed");
+    // Power/reset the panel via the display MCU (AVDD/IOVCC + reset pulse).
+    ESP_RETURN_ON_ERROR(prv_mcu_panel_power_on(), TAG, "MCU panel power sequence failed");
+    // Send the exact Pi init in command (LP) mode, BEFORE video mode is
+    // enabled by esp_lcd_panel_init() below.
+    for (size_t i = 0; i < sizeof(s_hx8399_init_cmds) / sizeof(s_hx8399_init_cmds[0]); i++) {
+        ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_param(io, s_hx8399_init_cmds[i].cmd,
+                            s_hx8399_init_cmds[i].data, s_hx8399_init_cmds[i].data_bytes),
+                            TAG, "bypass init cmd failed");
+        if (s_hx8399_init_cmds[i].delay_ms) {
+            vTaskDelay(pdMS_TO_TICKS(s_hx8399_init_cmds[i].delay_ms));
+        }
+    }
+    ESP_LOGW(TAG, "DSI_COMPONENT_BYPASS: drove %u Pi init cmds directly (no preamble, no 0xBA)",
+             (unsigned)(sizeof(s_hx8399_init_cmds) / sizeof(s_hx8399_init_cmds[0])));
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_init(s_panel), TAG, "DPI panel init failed");
+#else
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_hx8399(io, &panel_cfg, &s_panel),
                         TAG, "HX8399 panel create failed");
 
@@ -719,6 +847,7 @@ static esp_err_t prv_panel_init(void)
     // Display ON is sent from inside s_hx8399_init_cmds (before video streaming
     // starts) — see comment there. Do NOT call esp_lcd_panel_disp_on_off() here.
     ESP_RETURN_ON_ERROR(esp_lcd_panel_init(s_panel),  TAG, "Panel init failed");
+#endif
 
 #ifdef DSI_PATTERN_GEN_TEST
     // TEMPORARY 2026-07-12 diagnostic: enable the DSI HOST CONTROLLER's own
@@ -977,6 +1106,69 @@ static esp_err_t prv_panel_init(void)
         // driver's LCD_COLOR_PIXEL_FORMAT_RGB565/bits_per_pixel=16 config.
         // No bpp mismatch. Left in (harmless, real hardware-verified
         // finding) for the same reason as the lpclk_ctrl force below.
+        // TEST 2026-07-12 (Opus): the bridge scan-out is PROVEN running
+        // (disabling dpi_en pegs raw_buf; enabling drains it) yet the Host's
+        // DPI-input FIFOs (vid_pkt_status) are always empty -> the Host is
+        // not latching the bridge's DPI output. Dump the Host video-mode +
+        // timing registers AND their shadow/active (_act) mirrors. If the
+        // config regs hold our values but the _act regs read 0, the Host's
+        // ACTUAL video timing was never applied (shadow never committed;
+        // vid_shadow_en defaults 0 and ESP-IDF never touches it) -> Host
+        // never frames -> exactly our symptom. dpi2lane ratio = 1500/80/8 =
+        // 2.34375 (non-integer) so also watch for truncation-mangled hsa/
+        // hbp/hline vs the bridge's htotal=752/hdisp=720.
+        ESP_LOGW(TAG, "DSI_HOST vid: mode_cfg=0x%lX(act=0x%lX) pkt_size=%lu(act=%lu) num_chunks=%lu null=%lu shadow_ctrl=0x%lX",
+                 (unsigned long)MIPI_DSI_HOST.vid_mode_cfg.val,
+                 (unsigned long)MIPI_DSI_HOST.vid_mode_cfg_act.val,
+                 (unsigned long)MIPI_DSI_HOST.vid_pkt_size.val,
+                 (unsigned long)MIPI_DSI_HOST.vid_pkt_size_act.val,
+                 (unsigned long)MIPI_DSI_HOST.vid_num_chunks.val,
+                 (unsigned long)MIPI_DSI_HOST.vid_null_size.val,
+                 (unsigned long)MIPI_DSI_HOST.vid_shadow_ctrl.val);
+        ESP_LOGW(TAG, "DSI_HOST vid H: hsa=%lu(act=%lu) hbp=%lu(act=%lu) hline=%lu(act=%lu)",
+                 (unsigned long)MIPI_DSI_HOST.vid_hsa_time.val,
+                 (unsigned long)MIPI_DSI_HOST.vid_hsa_time_act.val,
+                 (unsigned long)MIPI_DSI_HOST.vid_hbp_time.val,
+                 (unsigned long)MIPI_DSI_HOST.vid_hbp_time_act.val,
+                 (unsigned long)MIPI_DSI_HOST.vid_hline_time.val,
+                 (unsigned long)MIPI_DSI_HOST.vid_hline_time_act.val);
+        ESP_LOGW(TAG, "DSI_HOST vid V: vsa=%lu(act=%lu) vbp=%lu(act=%lu) vfp=%lu(act=%lu) vactive=%lu(act=%lu)",
+                 (unsigned long)MIPI_DSI_HOST.vid_vsa_lines.val,
+                 (unsigned long)MIPI_DSI_HOST.vid_vsa_lines_act.val,
+                 (unsigned long)MIPI_DSI_HOST.vid_vbp_lines.val,
+                 (unsigned long)MIPI_DSI_HOST.vid_vbp_lines_act.val,
+                 (unsigned long)MIPI_DSI_HOST.vid_vfp_lines.val,
+                 (unsigned long)MIPI_DSI_HOST.vid_vfp_lines_act.val,
+                 (unsigned long)MIPI_DSI_HOST.vid_vactive_lines.val,
+                 (unsigned long)MIPI_DSI_HOST.vid_vactive_lines_act.val);
+
+        // TEST 2026-07-12 (Opus): read the DPI PIXEL CLOCK GENERATOR itself
+        // (HP_SYS_CLKRST.peri_clk_ctrl03) — a SYSTEM clock register, NOT a
+        // DSI-peripheral register, and never read back on hardware in any
+        // prior session. This is the clock that drives the DSI BRIDGE's DPI
+        // scan-out (raw_buf -> DPI video -> Host). It is a *different clock
+        // domain* from the D-PHY lane PLL (1500Mbps, already verified). The
+        // Host's internal pattern generator runs on the PHY/byte clock and
+        // BYPASSES this clock entirely — so a dead/mis-divided DPI clock
+        // would look EXACTLY like our symptom (pattern gen bursts; real
+        // bridge-sourced rendering never drains raw_buf into vid_pkt).
+        // Expected for WS_DPI_CLK_MHZ=75: src_sel=1 (PLL_F240M), en=1,
+        // div_num=2 (div=3 -> 240/3 = 80MHz actual; note 75 requests round
+        // UP to 80 via integer division 240/75=3). Anything else here is
+        // the smoking gun.
+        uint32_t clk03 = HP_SYS_CLKRST.peri_clk_ctrl03.val;
+        uint32_t dpi_src  = (clk03 >> 5) & 0x3;
+        uint32_t dpi_en   = (clk03 >> 7) & 0x1;
+        uint32_t dpi_divn = (clk03 >> 8) & 0xFF;
+        const uint32_t src_mhz = (dpi_src == 1) ? 240 : (dpi_src == 2) ? 160 : (dpi_src == 0) ? 40 /*XTAL*/ : 0;
+        ESP_LOGW(TAG, "DPI_CLK: peri_clk_ctrl03=0x%08lX en=%lu src_sel=%lu(%luMHz) div_num=%lu -> div=%lu actual_dpi=%luMHz "
+                 "[phy_cfg_clk_en=%lu phy_pll_refclk_en=%lu]",
+                 (unsigned long)clk03, (unsigned long)dpi_en, (unsigned long)dpi_src,
+                 (unsigned long)src_mhz, (unsigned long)dpi_divn,
+                 (unsigned long)(dpi_divn + 1),
+                 (unsigned long)(src_mhz ? src_mhz / (dpi_divn + 1) : 0),
+                 (unsigned long)(clk03 & 1), (unsigned long)((clk03 >> 1) & 1));
+
         uint32_t frame_iv_before = MIPI_DSI_BRIDGE.dma_frame_interval.val;
         ESP_LOGW(TAG, "DSI_BRIDGE dma_frame_interval=0x%lX(slot=%lu interval=%lu multiblk_en=%lu interval_en=%lu)",
                  (unsigned long)frame_iv_before,
@@ -1010,6 +1202,69 @@ static esp_err_t prv_panel_init(void)
         ESP_LOGW(TAG, "DSI_HOST: lpclk_ctrl before=0x%lX after=0x%lX (forced continuous HS clock lane, auto_clklane_ctrl=0)",
                  (unsigned long)lpclk_before, (unsigned long)MIPI_DSI_HOST.lpclk_ctrl.val);
     }
+#endif
+
+#ifdef DSI_SHADOW_FIX
+    // 2026-07-12 (Opus) — THE FIX. ESP-IDF configures the DSI Host video
+    // timing registers (vid_pkt_size/vid_hline_time/vid_vactive_lines/...)
+    // but NEVER transfers them to the Host's active/shadow set: vid_shadow_en
+    // defaults 0 and the driver never issues a shadow request. On this
+    // silicon the video packetizer runs off the *_act registers, which stay
+    // 0 -> it emits nothing (vactive=0/pkt_size=0). Proven live: a shadow
+    // load populates *_act (720/1761/1920) and a video-mode restart then
+    // makes BOTH data lanes burst real GDMA-fed video (phy 0x1529, vid_pkt
+    // payload FULL) — the first real HS video all investigation.
+    // ORDERING MATTERS: this must run AFTER the clock lane is in continuous
+    // HS (the lpclk_ctrl force just above). Doing the restart while the
+    // clock lane is still in AUTO leaves the payload FULL but data lanes
+    // idle (proven). So this block is intentionally last in init.
+    esp_rom_delay_us(1000);
+    MIPI_DSI_HOST.vid_shadow_ctrl.val = 0x1;           // vid_shadow_en=1
+    esp_rom_delay_us(500);
+    MIPI_DSI_HOST.vid_shadow_ctrl.val = 0x101;          // en=1 + vid_shadow_req=1 (load config->active)
+    esp_rom_delay_us(5000);
+    MIPI_DSI_HOST.mode_cfg.cmd_video_mode = 1;          // command mode (video SM off)
+    esp_rom_delay_us(2000);
+    MIPI_DSI_HOST.mode_cfg.cmd_video_mode = 0;          // video mode (SM restarts with valid *_act timing)
+    esp_rom_delay_us(30000);                            // let ~1-2 frames stream so signal is live
+    ESP_LOGW(TAG, "DSI_SHADOW_FIX: vid_act pkt_size=%lu hline=%lu vactive=%lu | phy=0x%08lX(d0stop=%lu d1stop=%lu) vid_pkt=0x%08lX",
+             (unsigned long)MIPI_DSI_HOST.vid_pkt_size_act.val,
+             (unsigned long)MIPI_DSI_HOST.vid_hline_time_act.val,
+             (unsigned long)MIPI_DSI_HOST.vid_vactive_lines_act.val,
+             (unsigned long)MIPI_DSI_HOST.phy_status.val,
+             (unsigned long)((MIPI_DSI_HOST.phy_status.val >> 4) & 1),
+             (unsigned long)((MIPI_DSI_HOST.phy_status.val >> 7) & 1),
+             (unsigned long)MIPI_DSI_HOST.vid_pkt_status.val);
+
+#ifdef DSI_VPG_TEST
+    // 2026-07-12 (Opus) decisive panel-lock test with the panel's EXACT
+    // required DSI mode, from the authoritative Waveshare/Pi driver
+    // (ws_panel_12_3_inch_a_4lane_desc: non-burst sync-events, non-
+    // continuous clock, RGB888). Transmit RGB888 color bars via the host VPG
+    // (bypasses framebuffer/PPA/GDMA/bridge) at the legal 960Mbps lane rate
+    // (= 80MHz DPI * 24bpp / 2 lanes, the non-burst-matched rate). If the
+    // panel shows bars -> mode/clock/format are right and I do the full
+    // RGB888 LVGL refactor. If not -> keep debugging the DSI mode.
+    MIPI_DSI_HOST.vid_mode_cfg.vid_mode_type = 1;        // non-burst sync EVENTS (was burst=2)
+    MIPI_DSI_HOST.dpi_color_coding.dpi_color_coding = 5; // 24-bit RGB888 (was 16-bit RGB565)
+    MIPI_DSI_HOST.lpclk_ctrl.val = 0x3;                  // AUTO clock lane = NON-continuous (undo the continuous-HS force)
+    esp_lcd_dpi_panel_set_pattern(s_panel, MIPI_DSI_PATTERN_BAR_VERTICAL);
+    esp_rom_delay_us(1000);
+    MIPI_DSI_HOST.vid_shadow_ctrl.val = 0x101;           // reload shadow so vpg_en + mode/coding enter *_act
+    esp_rom_delay_us(5000);
+    MIPI_DSI_HOST.mode_cfg.cmd_video_mode = 1;
+    esp_rom_delay_us(2000);
+    MIPI_DSI_HOST.mode_cfg.cmd_video_mode = 0;
+    esp_rom_delay_us(30000);
+    ESP_LOGW(TAG, "DSI_VPG_TEST(RGB888/non-burst/non-cont): phy=0x%08lX(d0stop=%lu d1stop=%lu) vid_pkt=0x%08lX mode_cfg=0x%lX coding=0x%lX lpclk=0x%lX",
+             (unsigned long)MIPI_DSI_HOST.phy_status.val,
+             (unsigned long)((MIPI_DSI_HOST.phy_status.val >> 4) & 1),
+             (unsigned long)((MIPI_DSI_HOST.phy_status.val >> 7) & 1),
+             (unsigned long)MIPI_DSI_HOST.vid_pkt_status.val,
+             (unsigned long)MIPI_DSI_HOST.vid_mode_cfg.val,
+             (unsigned long)MIPI_DSI_HOST.dpi_color_coding.val,
+             (unsigned long)MIPI_DSI_HOST.lpclk_ctrl.val);
+#endif
 #endif
 
 #ifdef PANEL_BIST_TEST

@@ -2563,3 +2563,116 @@ system issues). Diagnostic code for this session's additions
 (dma_frame_interval dump+force) is added to `waveshare_display.c`
 under the existing `DSI_BRIDGE_STATUS_TEST` guard, harmless (zero
 crashes, zero underrun observed), not yet committed.
+
+## 2026-07-12 (Opus session): ★ THE BLANK-SCREEN ROOT CAUSE FOUND — DSI Host video-timing shadow registers never loaded. HS video now transmits. ★
+
+**This overturns the prior multi-session conclusion and is the single
+biggest finding in the whole investigation.** Summary of the chain:
+
+**1. Reframe: the DSI Bridge was always innocent.** Prior sessions
+concluded "data reaches the bridge raw buffer but the bridge never scans
+it out / never hands off to the Host." Proven FALSE. Test: disable
+`MIPI_DSI_BRIDGE.dpi_misc_config.dpi_en` during live rendering → raw_buf
+immediately pegs at 1021 and sticks; re-enable → it drains and oscillates
+766-1021. So the bridge DPI scan-out IS actively consuming pixels. The
+fault was entirely Host-side.
+
+**2. THE BUG: ESP-IDF never loads the DSI Host video-timing SHADOW/ACTIVE
+registers.** The DesignWare DSI Host packetizer runs off the `vid_*_act`
+(active) copies of the video timing registers. ESP-IDF writes the CONFIG
+registers (`vid_pkt_size=720`, `vid_hline_time=1128`,
+`vid_vactive_lines=1920`, `vid_mode_cfg`, ...) but leaves
+`vid_shadow_ctrl.vid_shadow_en=0` and NEVER issues a shadow-load request.
+Read live: every `*_act` register = 0 (`vid_pkt_size_act=0`,
+`vid_vactive_lines_act=0`, ...). So the packetizer runs with 0 active
+pixels / 0 lines and emits nothing — exactly the "PHY never bursts, Host
+DPI FIFOs always empty" symptom chased for weeks.
+
+**THE FIX (proven live — first real GDMA-fed HS video ever):**
+```
+MIPI_DSI_HOST.vid_shadow_ctrl.val = 0x1;    // vid_shadow_en=1
+MIPI_DSI_HOST.vid_shadow_ctrl.val = 0x101;  // + vid_shadow_req -> load config->act
+// restart the video state machine so it re-samples *_act:
+MIPI_DSI_HOST.mode_cfg.cmd_video_mode = 1;  // command mode
+MIPI_DSI_HOST.mode_cfg.cmd_video_mode = 0;  // video mode
+```
+After this: `*_act` populated (720/1128/1920), `phy_status=0x00001529`
+(clkstop=0 d0stop=0 d1stop=0 — BOTH data lanes bursting), `vid_pkt_status`
+cycling `0x00020001`/`0x00020005` (payload buffer FULL). Continuous
+healthy video (phy alternates 0x1529 active / 0x15B9 blanking).
+Guarded by `-DDSI_SHADOW_FIX`, placed LAST in `prv_panel_init()` (ordering
+matters — must run after the clock lane is set up, else payload fills but
+data lanes stay idle). Almost certainly a general ESP-IDF 5.4.2 P4 bug
+(matches upstream #18111 "RGB565 no display / self-check works" and
+#18083 "Tab5 DSI issues"). Proper fix = patch `dpi_panel_init()` to load
+the shadow before/with enabling video mode, via the patch script.
+
+**3. Lane rate 1500→960 Mbps.** 1500 Mbps/lane EXCEEDS the HX8399-C's max
+DSI receiver rate (datasheet line ~15509: 4Gbps over 4 lanes 24-bit =
+1.0 Gbps/lane absolute PHY max). The panel physically can't lock to 1500,
+so it stayed black even with perfect transmission. The earlier "only 1500
+makes phy_status burst" was really the shadow bug being worked around, not
+a lane-rate effect. 960 = 80MHz DPI × 24bpp / 2 lanes (the non-burst
+RGB888-matched rate), and ≤1000 max. Pi runs this panel at ~540 Mbps/lane
+on 4 lanes (DSI1) and also works on 2-lane DSI0; we need ~2× per lane on
+2 lanes.
+
+**4. Authoritative panel config obtained** from the working Pi driver
+(`raspberrypi/linux` rpi-6.18.y
+`drivers/gpu/drm/panel/panel-waveshare-dsi-v2.c`,
+`ws_panel_12_3_inch_a_4lane_desc`, mode clock 95000 = 95MHz, timing
+identical to ours: htotal 752 / vtotal 2006):
+```
+mode_flags = MIPI_DSI_MODE_VIDEO_HSE | MIPI_DSI_MODE_VIDEO |
+             MIPI_DSI_MODE_LPM | MIPI_DSI_CLOCK_NON_CONTINUOUS
+format     = MIPI_DSI_FMT_RGB888
+```
+So the panel needs: NON-burst SYNC-EVENTS (no BURST, no SYNC_PULSE flag),
+NON-continuous clock, and RGB888/24bpp. We were sending burst + forced-
+continuous clock + RGB565 — wrong on all three. Register overrides that
+match the panel: `vid_mode_cfg.vid_mode_type=1` (non-burst events),
+`dpi_color_coding.dpi_color_coding=5` (24-bit RGB888),
+`lpclk_ctrl.val=0x3` (AUTO = non-continuous). Currently applied inside the
+`DSI_VPG_TEST` block only.
+
+**5. Panel INIT sequence was WRONG — replaced.** Our `s_hx8399_init_cmds[]`
+was a GENERIC HX8399 init (SETPOWER 0xB1 13-byte, SETDISP 0xB2, SETCYC,
+SETGIP 0xD3/D5/D6 with generic values) that does NOT match this panel.
+The real 12.3" panel uses a bank-select-based sequence (0xBD bank selects,
+0xD1/0xBE/0xB1(4-byte)/0xB4/0xD3/0xD5/0xD6/0xD8, different values). The
+panel ACKed the old init (RDDPM=0x9D) but its GIP/power/timing were
+mis-programmed so it never displayed. Regenerated the array verbatim from
+the Pi driver (script in scratchpad) and spliced into
+`s_hx8399_init_cmds[]`. Builds + boots clean + still transmits.
+CAVEAT: the `esp_lcd_hx8399` component sends a fixed preamble (SLPOUT,
+MADCTL, COLMOD, SETMIPI 0xBA) before our array; 0xBA is not in the Pi
+sequence. If correct-init alone doesn't display, bypass the component and
+drive the exact Pi sequence via `esp_lcd_panel_io_tx_param()` directly.
+
+**CURRENT STATE (flashed on `waveshare_debug_usb`):** Pi 12.3" init +
+shadow fix + `DSI_VPG_TEST` transmitting RGB888 non-burst/non-continuous
+color bars at 960 Mbps. Boots clean, transmits (phy=0x1529). As of the
+last check the panel was still black at 960+RGB888-VPG with the OLD init;
+the NEW (correct) init is now flashed and awaiting a visual reset test.
+
+**REMAINING WORK (in priority order):**
+1. Visual test: does the panel show color bars with the correct Pi init +
+   RGB888 VPG? If YES → the last piece is making REAL content RGB888.
+2. **RGB888 framebuffer refactor** (the big one): LVGL
+   `LV_COLOR_FORMAT_RGB888`, PPA in/out `PPA_SRM_COLOR_MODE_RGB888`, DPI
+   panel `pixel_format=RGB888`/`bits_per_pixel=24`, rotation buffer +
+   framebuffer + `esp_cache_msync` sizes ×3 (were ×2 for RGB565).
+3. Fold the non-burst/non-continuous/RGB888 register overrides into the
+   real (non-VPG) render path (not just the VPG test block).
+4. If still black: bypass the hx8399 component init (drop its SETMIPI
+   0xBA + SLPOUT-first preamble) and send the exact Pi sequence manually.
+5. Pixel clock: panel native 95MHz/60Hz; only 80MHz(53Hz) or 120MHz(79Hz)
+   achievable from PLL_F240M. 80 should be in tolerance; try 120 if 53Hz
+   is out of the panel's VRR range.
+
+Diagnostic build flags currently on: PANEL_DIAG_READ_TEST,
+DSI_HOST_STATUS_TEST, DSI_BRIDGE_STATUS_TEST, DSI_TIGHT_POLL_TEST,
+DSI_SHADOW_FIX, DSI_VPG_TEST, HX8399_SELFTEST_RETRIGGER. The forced
+continuous-clock-lane hack (lpclk=0x1) in DSI_BRIDGE_STATUS_TEST is now
+overridden to 0x3 (non-continuous) inside the VPG block — for the real
+fix, set it to AUTO (0x3) or remove the force entirely.
