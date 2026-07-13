@@ -823,7 +823,16 @@ static esp_err_t prv_panel_init(void)
     ESP_RETURN_ON_ERROR(prv_mcu_panel_power_on(), TAG, "MCU panel power sequence failed");
     // Send the exact Pi init in command (LP) mode, BEFORE video mode is
     // enabled by esp_lcd_panel_init() below.
-    for (size_t i = 0; i < sizeof(s_hx8399_init_cmds) / sizeof(s_hx8399_init_cmds[0]); i++) {
+    // NOTE 2026-07-13 (Opus): tried injecting SETMIPI (0xBA=0x01, 2-lane)
+    // here after the unlock (to rule out the panel being at a non-2-lane
+    // power-on default) — it HANGS the next LP command in ESP-IDF's
+    // unguarded DSI cmd-FIFO spin-wait (WDT reboot). The Pi driver never
+    // sends 0xBA, so removed again. If the 2-lane hypothesis needs testing,
+    // it requires the bounded-FIFO-wait HAL patch (scripts/patch_espidf_
+    // builder.py, _MIPI_DSI_HAL_PATCH) and/or sending 0xBA at a different
+    // point (the component sent it AFTER its own SLPOUT).
+    const size_t n_init = sizeof(s_hx8399_init_cmds) / sizeof(s_hx8399_init_cmds[0]);
+    for (size_t i = 0; i < n_init; i++) {
         ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_param(io, s_hx8399_init_cmds[i].cmd,
                             s_hx8399_init_cmds[i].data, s_hx8399_init_cmds[i].data_bytes),
                             TAG, "bypass init cmd failed");
@@ -832,7 +841,7 @@ static esp_err_t prv_panel_init(void)
         }
     }
     ESP_LOGW(TAG, "DSI_COMPONENT_BYPASS: drove %u Pi init cmds directly (no preamble, no 0xBA)",
-             (unsigned)(sizeof(s_hx8399_init_cmds) / sizeof(s_hx8399_init_cmds[0])));
+             (unsigned)n_init);
     ESP_RETURN_ON_ERROR(esp_lcd_panel_init(s_panel), TAG, "DPI panel init failed");
 #else
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_hx8399(io, &panel_cfg, &s_panel),
