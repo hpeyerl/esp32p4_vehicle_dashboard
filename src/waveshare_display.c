@@ -138,7 +138,15 @@ static const char *TAG = "ws_disp";
 // timing ratio, and sits in the proven-working range of a 2-lane Pi DSI0
 // driving this same panel (~725-1086 Mbps/lane). Pi uses 4 lanes on DSI1 at
 // only ~540 Mbps/lane; we need ~2x per lane since only 2 lanes are wired.
-#define WS_DSI_LANE_MBPS      960
+// 2026-07-13 (Opus): 960 -> 1140 to match the user's KNOWN-WORKING Pi 2-lane
+// DSI0 rate for this exact panel (95MHz pixel clock * 24bpp / 2 lanes = 1140
+// Mbps/lane => 570MHz HS clock). Cable is exonerated (correct pinout, clock
+// reaches panel full-amplitude) and every other transmit variable matches
+// the Pi, so the last config difference is the HS clock rate the panel's DSI
+// PLL locks to. Long shot (960 is only ~16% off, likely within lock range),
+// but it's the exact rate the panel is proven to accept on the Pi. Well
+// within the P4 D-PHY range (we ran 1500 earlier).
+#define WS_DSI_LANE_MBPS      1140
 // 2026-07-12 BREAKTHROUGH: was 75 (see below for the full prior history)
 // — paired with WS_DSI_LANE_MBPS=1500 above, this is the first DPI
 // clock/lane-rate combination all session that produces real HS bursts
@@ -823,14 +831,13 @@ static esp_err_t prv_panel_init(void)
     ESP_RETURN_ON_ERROR(prv_mcu_panel_power_on(), TAG, "MCU panel power sequence failed");
     // Send the exact Pi init in command (LP) mode, BEFORE video mode is
     // enabled by esp_lcd_panel_init() below.
-    // NOTE 2026-07-13 (Opus): tried injecting SETMIPI (0xBA=0x01, 2-lane)
-    // here after the unlock (to rule out the panel being at a non-2-lane
-    // power-on default) — it HANGS the next LP command in ESP-IDF's
-    // unguarded DSI cmd-FIFO spin-wait (WDT reboot). The Pi driver never
-    // sends 0xBA, so removed again. If the 2-lane hypothesis needs testing,
-    // it requires the bounded-FIFO-wait HAL patch (scripts/patch_espidf_
-    // builder.py, _MIPI_DSI_HAL_PATCH) and/or sending 0xBA at a different
-    // point (the component sent it AFTER its own SLPOUT).
+    // NOTE 2026-07-13 (Opus): explicit SETMIPI 0xBA=0x01 (2-lane) tested and
+    // REJECTED. Even with the bounded-FIFO HAL patch, sending 0xBA here
+    // breaks the DSI LP command channel entirely — every subsequent command
+    // times out ("cmd FIFO never cleared") until WDT. The Pi driver never
+    // sends 0xBA for this panel; it uses 0xBB=0x01 (already in our Pi init
+    // sequence), so lane/mode setup is already handled the working-Pi way.
+    // Left out — do not re-add.
     const size_t n_init = sizeof(s_hx8399_init_cmds) / sizeof(s_hx8399_init_cmds[0]);
     for (size_t i = 0; i < n_init; i++) {
         ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_param(io, s_hx8399_init_cmds[i].cmd,

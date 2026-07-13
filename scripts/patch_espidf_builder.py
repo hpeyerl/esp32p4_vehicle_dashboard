@@ -123,7 +123,14 @@ except Exception as e:
 # the patched version's ~1s window. Flip back to True afterward if the
 # scope session doesn't change the plan. See CONTEXT.md "DSI hang
 # deep-dive" / "Framework patch attempt" / "Cable swap" sections.
-_MIPI_DSI_HAL_PATCH_ENABLED = False
+# 2026-07-13 (Opus): RE-ENABLED. Cable is now exonerated (buzz-out + scope:
+# correct pinout, clock reaches the panel at full amplitude). Remaining
+# suspect is panel-side lane count — the panel MUST be in 2-lane mode (P4
+# has only 2 lanes wired) but our explicit SETMIPI 0xBA=2-lane hangs the
+# next LP command in the unguarded FIFO spin-wait. This patch bounds that
+# wait so the 2-lane SETMIPI can be sent and the init proceeds, letting us
+# finally test whether the panel's default lane count was the blocker.
+_MIPI_DSI_HAL_PATCH_ENABLED = True
 if not _MIPI_DSI_HAL_PATCH_ENABLED:
     print("[patch_espidf] mipi_dsi_hal.c patch SKIPPED (disabled for scope session — original hang-forever behavior active, see CONTEXT.md)")
 try:
