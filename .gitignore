@@ -1,0 +1,27 @@
+# --- Secrets ---
+include/secrets.h
+
+# --- ESP-IDF / PlatformIO build ---
+.pio/
+sdkconfig
+sdkconfig.*
+managed_components/
+dependencies.lock
+
+# --- Local notes / context (kept off GitHub) ---
+CONTEXT.md
+*_CONTEXT.md
+
+# --- Datasheets / large binaries (kept local) ---
+*.pdf
+*.tar.gz
+
+# --- Linux / CMake build (pi5 port) ---
+build/
+*.o
+*.a
+*.so
+
+# --- Editor / OS ---
+.vscode/
+.DS_Store

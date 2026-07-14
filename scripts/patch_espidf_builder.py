@@ -187,6 +187,57 @@ try:
 except Exception as e:
     print(f"[patch_espidf] mipi_dsi_hal.c patch failed: {e}")
 
+# ── Patch mipi_dsi_hal.c UNBOUNDED READ (BTA) spins ──────────────────────────
+# 2026-07-13: the write/cmd FIFO spins above are bounded, but the BTA-READ path
+# mipi_dsi_hal_host_gen_read_short_packet() has its OWN two unbounded spins
+# (is_read_cmd_busy, is_read_fifo_empty). Once we switch the HX8399 to 2-lane
+# (SETMIPI 0xBA, last init cmd) the panel stops answering LP BTA reads, so the
+# first diagnostic read (RDDPM) spins forever -> WDT (decoded to hal.c:211).
+# Bound both to ~1s like the write path so diagnostic reads fail soft and the
+# code proceeds to HS video. Independent + idempotent: keyed on the unbounded
+# read strings so it still applies when the block above already ran (marker
+# present). NB: the `;`-terminated wait spins differ from the `!...) {` drain
+# loop, so only the two blocking waits are matched.
+try:
+  if _MIPI_DSI_HAL_PATCH_ENABLED:
+    dsi_hal = os.path.join(
+        os.path.expanduser("~/.platformio"), "packages", "framework-espidf",
+        "components", "hal", "mipi_dsi_hal.c"
+    )
+    if os.path.exists(dsi_hal):
+        with open(dsi_hal, 'r') as f:
+            content = f.read()
+        old_rbusy  = "while (mipi_dsi_host_ll_gen_is_read_cmd_busy(hal->host));"
+        old_rempty = "while (mipi_dsi_host_ll_gen_is_read_fifo_empty(hal->host));"
+        if old_rbusy not in content and old_rempty not in content:
+            print("[patch_espidf] mipi_dsi_hal.c read (BTA) spins already bounded")
+        else:
+            if "esp_rom_sys.h" not in content:
+                content = content.replace('#include "soc/mipi_dsi_periph.h"',
+                    '#include "soc/mipi_dsi_periph.h"\n#include "esp_rom_sys.h"', 1)
+            new_rbusy = (
+                "for (int _dsi_rb_i = 0; mipi_dsi_host_ll_gen_is_read_cmd_busy(hal->host); _dsi_rb_i++) "
+                "{ if (_dsi_rb_i >= 100000) { HAL_LOGW(\"dsi_hal\", \"read cmd never completed after ~1s "
+                "(patched, BTA) - giving up\"); break; } esp_rom_delay_us(10); }"
+            )
+            new_rempty = (
+                "for (int _dsi_re_i = 0; mipi_dsi_host_ll_gen_is_read_fifo_empty(hal->host); _dsi_re_i++) "
+                "{ if (_dsi_re_i >= 100000) { HAL_LOGW(\"dsi_hal\", \"read FIFO never filled after ~1s "
+                "(patched, BTA) - no panel response\"); break; } esp_rom_delay_us(10); }"
+            )
+            rb  = content.count(old_rbusy)
+            rem = content.count(old_rempty)
+            content = content.replace(old_rbusy, new_rbusy)
+            content = content.replace(old_rempty, new_rempty)
+            with open(dsi_hal, 'w') as f:
+                f.write(content)
+            print(f"[patch_espidf] patched mipi_dsi_hal.c BTA-read path — bounded "
+                  f"{rb} read-busy + {rem} read-fifo spin(s) to ~1s max instead of forever")
+    else:
+        print(f"[patch_espidf] mipi_dsi_hal.c not found — skipping read-spin patch")
+except Exception as e:
+    print(f"[patch_espidf] mipi_dsi_hal.c read-spin patch failed: {e}")
+
 # ── Patch mspi_timing_tuning_configs.h: reduce PSRAM delayline tuning repeat count ──
 # 2026-07-13: PSRAM 200MHz DQS/delayline tuning genuinely SUCCEEDS every time
 # (confirmed via serial log: "tuning success, best phase id is 0" then

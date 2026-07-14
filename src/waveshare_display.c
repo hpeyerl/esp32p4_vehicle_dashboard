@@ -147,7 +147,7 @@ static const char *TAG = "ws_disp";
 // requires RGB565 (see DSI_VPG_TEST color_coding change to 0/16-bit); RGB888
 // needs >=960. 2026-07-13: 640 was dark (SI ruled out); now 960 to pair with
 // the 120MHz DPI refresh test (960 = 120*16/2, non-burst RGB565 matched).
-#define WS_DSI_LANE_MBPS      960
+#define WS_DSI_LANE_MBPS      640   // 2026-07-14: RGB565 non-burst matched rate = 80MHz*16bpp/2lanes (solid-white real-DPI test).
 // 2026-07-12 BREAKTHROUGH: was 75 (see below for the full prior history)
 // — paired with WS_DSI_LANE_MBPS=1500 above, this is the first DPI
 // clock/lane-rate combination all session that produces real HS bursts
@@ -219,6 +219,13 @@ static const hx8399_lcd_init_cmd_t s_hx8399_init_cmds[] = {
     // fixed preamble (SLPOUT, MADCTL, COLMOD, SETMIPI 0xBA) before this array;
     // 0xBA is not in the Pi sequence and may need removing (component bypass)
     // if this alone doesn't display.
+    // 2026-07-14: DCS SWRESET (0x01) FIRST — the panel is separately powered and
+    // retains register state across P4 resets (user cannot power-cycle it), so
+    // weeks of experimental inits/SETMIPI lane switches may have left it wedged.
+    // SWRESET returns the HX8399 to power-on defaults in software -> deterministic
+    // clean slate every boot. Datasheet: wait >5ms (panel needs up to 120ms to
+    // fully settle; the SLPOUT 120ms delay later covers the rest).
+    {0x01, NULL, 0, 20},
     {0xB9, (uint8_t[]){0x83, 0x10, 0x2E}, 3, 0},
     {0xE9, (uint8_t[]){0xCD}, 1, 0},
     {0xBB, (uint8_t[]){0x01}, 1, 0},
@@ -265,6 +272,22 @@ static const hx8399_lcd_init_cmd_t s_hx8399_init_cmds[] = {
     {0xBD, (uint8_t[]){0x00}, 1, 0},
     {0x11, NULL, 0, 120},
     {0x29, NULL, 0, 20},
+#ifdef SETMIPI_2LANE
+    // SETMIPI (0xBA): switch panel to 2-lane to MATCH the P4-Nano's 2 physical
+    // DSI lanes. Panel power-on default is DSISETUP0=0x63 => bits[1:0]=11 =>
+    // 4-LANE (datasheet 6.3.7 p.221); the 4-lane-defaulted panel gets our
+    // 2-lane data ECC-clean (RDNUMPE=0) but can't reassemble 4-lane frames =>
+    // never paints. 0x61 = default 0x63 with ONLY bits[1:0]=01 (2-lane); bit5
+    // (CD_disable) STAYS 1 so LP contention detection stays OFF (the old 0x01
+    // cleared bit5 => re-enabled LP-CD => LP hang). 0x03 = DSISETUP1 default.
+    // CRITICAL ORDERING: this MUST be the LAST init command. Every command
+    // above is an LP (lane-0) transfer that is lane-count-agnostic, so we run
+    // the whole init in the panel's default mode (proven to complete cleanly)
+    // and flip to 2-lane only here — switching mid-init poisons the LP channel
+    // ~1s later (empirically stalls at the bank-2 select). 200ms lets the
+    // panel settle into 2-lane before HS video starts.
+    {0xBA, (uint8_t[]){0x61, 0x03}, 2, 200},
+#endif
 };
 
 // ── LVGL flush callback ───────────────────────────────────────────────────
@@ -841,6 +864,12 @@ static esp_err_t prv_panel_init(void)
     // Left out — do not re-add.
     const size_t n_init = sizeof(s_hx8399_init_cmds) / sizeof(s_hx8399_init_cmds[0]);
     for (size_t i = 0; i < n_init; i++) {
+        // DSI_INIT_CMD_TRACE: log BEFORE each tx so the last line printed
+        // before a "cmd FIFO never cleared" stall names the exact command
+        // that killed the LP channel (distinguishes 0xB9 cmd#1=physical vs
+        // 0xBA cmd#2=SETMIPI-breaks-LP).
+        ESP_LOGI(TAG, "init[%u] tx cmd=0x%02X (%u bytes)", (unsigned)i,
+                 s_hx8399_init_cmds[i].cmd, (unsigned)s_hx8399_init_cmds[i].data_bytes);
         ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_param(io, s_hx8399_init_cmds[i].cmd,
                             s_hx8399_init_cmds[i].data, s_hx8399_init_cmds[i].data_bytes),
                             TAG, "bypass init cmd failed");
@@ -1235,6 +1264,25 @@ static esp_err_t prv_panel_init(void)
     // HS (the lpclk_ctrl force just above). Doing the restart while the
     // clock lane is still in AUTO leaves the payload FULL but data lanes
     // idle (proven). So this block is intentionally last in init.
+#ifdef SETMIPI_2LANE
+    // LANE-1 RECOVERY: the SETMIPI(0xBA) 2-lane switch leaves data lane 1 stuck
+    // in stop-state; the video restart below revives only lane 0 (proven by the
+    // lane-activity probe — without 0xBA both lanes burst 191810/191810, with
+    // 0xBA lane1=0/200000). Force a clean PHY digital reset so BOTH lane state
+    // machines re-enter from stop, then wait for PLL lock + all lanes stopped
+    // (mask 0x94 = clk[2]+lane0[4]+lane1[7] stopstate) before the shadow reload.
+    MIPI_DSI_HOST.mode_cfg.cmd_video_mode = 1;          // command mode first
+    esp_rom_delay_us(1000);
+    MIPI_DSI_HOST.phy_rstz.phy_rstz = 0;                // assert digital PHY reset
+    esp_rom_delay_us(100);
+    MIPI_DSI_HOST.phy_rstz.phy_rstz = 1;                // deassert -> lanes re-init
+    for (int i = 0; i < 100000 && !MIPI_DSI_HOST.phy_status.phy_lock; i++) esp_rom_delay_us(10);
+    for (int i = 0; i < 100000; i++) { if ((MIPI_DSI_HOST.phy_status.val & 0x94) == 0x94) break; esp_rom_delay_us(10); }
+    ESP_LOGW(TAG, "LANE1_RECOVERY: post-PHY-reset phy_status=0x%08lX lock=%lu",
+             (unsigned long)MIPI_DSI_HOST.phy_status.val,
+             (unsigned long)MIPI_DSI_HOST.phy_status.phy_lock);
+    esp_rom_delay_us(2000);
+#endif
     esp_rom_delay_us(1000);
     MIPI_DSI_HOST.vid_shadow_ctrl.val = 0x1;           // vid_shadow_en=1
     esp_rom_delay_us(500);
@@ -1266,12 +1314,26 @@ static esp_err_t prv_panel_init(void)
     esp_rom_delay_us(3000);
     {
         uint8_t numpe = 0xAA, rddpm = 0xAA, rddsdr = 0xAA;
+        uint8_t scanA[2] = {0xAA, 0xAA}, scanB[2] = {0xAA, 0xAA};
         esp_lcd_panel_io_rx_param(io, 0x05, &numpe, 1);   // RDNUMPE
         esp_lcd_panel_io_rx_param(io, 0x0A, &rddpm, 1);    // RDDPM
         esp_lcd_panel_io_rx_param(io, 0x0F, &rddsdr, 1);   // RDDSDR
-        ESP_LOGW(TAG, "PANEL_ERR_READBACK after HS video: RDNUMPE=0x%02X RDDPM=0x%02X RDDSDR=0x%02X "
-                 "(RDNUMPE>0 => P4 HS packets CORRUPTED [scope]; =0 => clean but unpainted [IDF version])",
-                 numpe, rddpm, rddsdr);
+        // GETSCAN (0x45): panel's internal scanline counter. Sample it, run a
+        // video burst (~2-3 frames), sample again. ADVANCING => panel is locked
+        // to our video timing and actively scanning (gates running -> problem is
+        // the pixel payload / lane deskew). FROZEN => panel never locks our
+        // video timing at all (sync/framing problem).
+        esp_lcd_panel_io_rx_param(io, 0x45, scanA, 2);    // GETSCAN #1
+        MIPI_DSI_HOST.mode_cfg.cmd_video_mode = 0;         // video burst
+        esp_rom_delay_us(40000);
+        MIPI_DSI_HOST.mode_cfg.cmd_video_mode = 1;         // back to command
+        esp_rom_delay_us(3000);
+        esp_lcd_panel_io_rx_param(io, 0x45, scanB, 2);    // GETSCAN #2
+        uint16_t sA = (scanA[0] << 8) | scanA[1], sB = (scanB[0] << 8) | scanB[1];
+        ESP_LOGW(TAG, "PANEL_ERR_READBACK: RDNUMPE=0x%02X RDDPM=0x%02X RDDSDR=0x%02X | "
+                 "GETSCAN %u -> %u [%s] (advancing=>panel SCANNING, pixel/lane issue; "
+                 "frozen=>not locking video, sync issue)",
+                 numpe, rddpm, rddsdr, sA, sB, (sA != sB) ? "ADVANCING" : "FROZEN");
     }
     MIPI_DSI_HOST.mode_cfg.cmd_video_mode = 0;      // resume video
     esp_rom_delay_us(30000);
@@ -1286,10 +1348,16 @@ static esp_err_t prv_panel_init(void)
     // (= 80MHz DPI * 24bpp / 2 lanes, the non-burst-matched rate). If the
     // panel shows bars -> mode/clock/format are right and I do the full
     // RGB888 LVGL refactor. If not -> keep debugging the DSI mode.
-    MIPI_DSI_HOST.vid_mode_cfg.vid_mode_type = 1;        // non-burst sync EVENTS (was burst=2)
-    MIPI_DSI_HOST.dpi_color_coding.dpi_color_coding = 5; // 24-bit RGB888 (Pi-faithful; 960Mbps = 80MHz*24/2 non-burst matched)
-    MIPI_DSI_HOST.lpclk_ctrl.val = 0x3;                  // AUTO clock lane = NON-continuous (undo the continuous-HS force)
-    esp_lcd_dpi_panel_set_pattern(s_panel, MIPI_DSI_PATTERN_BAR_VERTICAL);
+    // 2026-07-14: vid_mode_type=0 = non-burst sync PULSES (sends HSS+HSE+VSS+VSE).
+    // The authoritative Pi driver sets MIPI_DSI_MODE_VIDEO_HSE for this panel;
+    // on DesignWare, HSE packets come ONLY from sync-pulse mode. We ran sync
+    // EVENTS (type=1, no HSE) in every prior test — the one unmatched flag.
+    MIPI_DSI_HOST.vid_mode_cfg.vid_mode_type = 0;        // non-burst sync PULSES (HSE), was 1=events
+    // 2026-07-14: max-visibility Pi-faithful test — bright VPG bars + RGB888
+    // (960Mbps) so a painting panel is unmistakable even over webcam/VNC.
+    MIPI_DSI_HOST.dpi_color_coding.dpi_color_coding = 0; // RGB565 (matches framebuffer for real-DPI solid-white test)
+    MIPI_DSI_HOST.lpclk_ctrl.val = 0x3;                  // AUTO clock lane = NON-continuous (matches Pi flags 0xc11)
+    esp_lcd_dpi_panel_set_pattern(s_panel, MIPI_DSI_PATTERN_NONE);  // real DPI (framebuffer), not VPG bars
     esp_rom_delay_us(1000);
     MIPI_DSI_HOST.vid_shadow_ctrl.val = 0x101;           // reload shadow so vpg_en + mode/coding enter *_act
     esp_rom_delay_us(5000);
@@ -1305,6 +1373,28 @@ static esp_err_t prv_panel_init(void)
              (unsigned long)MIPI_DSI_HOST.vid_mode_cfg.val,
              (unsigned long)MIPI_DSI_HOST.dpi_color_coding.val,
              (unsigned long)MIPI_DSI_HOST.lpclk_ctrl.val);
+    // DSI_LANE_ACTIVITY_PROBE: a single phy_status sample can catch blanking
+    // (a lane momentarily in stop). Sample tightly many times and count how
+    // often each data lane is BURSTING (stop bit == 0). If d1_active==0 the
+    // host never drives lane 1 => our "2-lane" video is really 1-lane => a
+    // FIXABLE host bug. If d1_active>0 both lanes burst => transmission is
+    // correct and the panel simply won't paint 2-lane => it needs 4 lanes
+    // (structural dead-end for the 2-lane P4-Nano).
+    {
+        uint32_t d0_active = 0, d1_active = 0, N = 200000;
+        for (uint32_t i = 0; i < N; i++) {
+            uint32_t p = MIPI_DSI_HOST.phy_status.val;
+            if (((p >> 4) & 1) == 0) d0_active++;   // d0stop==0 => lane0 bursting
+            if (((p >> 7) & 1) == 0) d1_active++;   // d1stop==0 => lane1 bursting
+        }
+        ESP_LOGW(TAG, "LANE_ACTIVITY over %lu samples: d0_bursting=%lu d1_bursting=%lu "
+                 "(d1_bursting==0 => lane1 DEAD [fixable host bug]; >0 => both lanes live [panel needs 4-lane])",
+                 (unsigned long)N, (unsigned long)d0_active, (unsigned long)d1_active);
+        ESP_LOGW(TAG, "LANE_CONFIG: phy_if_cfg.n_lanes=%lu (0=>1lane 1=>2lanes 2=>3 3=>4; want 1 for 2-lane) "
+                 "phy_if_cfg=0x%08lX",
+                 (unsigned long)MIPI_DSI_HOST.phy_if_cfg.n_lanes,
+                 (unsigned long)MIPI_DSI_HOST.phy_if_cfg.val);
+    }
 #endif
 #endif
 
@@ -1362,6 +1452,12 @@ static esp_err_t prv_panel_init(void)
             esp_err_t fill_ret = esp_lcd_panel_draw_bitmap(s_panel, 0, 0, WS_PANEL_H, WS_PANEL_V, fill_buf);
             ESP_LOGW(TAG, "SOLID_FILL_TEST: draw_bitmap(0,0,%d,%d) solid white -> %s",
                      WS_PANEL_H, WS_PANEL_V, esp_err_to_name(fill_ret));
+            // 2026-07-14: HOLD white persistently — halt here so no LVGL flush
+            // overwrites the framebuffer. Bridge GDMA keeps streaming white to
+            // the panel indefinitely, so the webcam can't miss it as a flash.
+            ESP_LOGW(TAG, "SOLID_FILL_TEST: holding solid white (halt) — watch the panel");
+            for (;;) { vTaskDelay(pdMS_TO_TICKS(3000));
+                       ESP_LOGW(TAG, "SOLID_FILL_TEST: still holding white (GETSCAN advancing=scanning white)"); }
         } else {
             ESP_LOGE(TAG, "SOLID_FILL_TEST: fill_buf alloc failed");
         }
