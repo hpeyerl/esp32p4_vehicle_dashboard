@@ -267,6 +267,14 @@ static void prv_gear_tap_cb(lv_event_t *e)
     gear_shifter_request(gear);
 }
 
+// Nav-bar button tap → switch screen. user_data is the dash_screen_t index
+// (HOME=0, SETTINGS=1, STATUS=2), matching nav_labels order.
+static void prv_nav_tap_cb(lv_event_t *e)
+{
+    int scr = (int)(intptr_t)lv_event_get_user_data(e);
+    dashboard_ui_set_screen((dash_screen_t)scr);
+}
+
 // ── dashboard_ui_create ───────────────────────────────────────────────────
 void dashboard_ui_create(lv_display_t *disp)
 {
@@ -619,6 +627,8 @@ void dashboard_ui_create(lv_display_t *disp)
         lv_obj_set_style_border_width(btn, 0, 0);
         lv_obj_set_style_radius(btn, 6, 0);
         lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(btn, prv_nav_tap_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
         lv_obj_t *lbl = lv_label_create(btn);
         lv_label_set_text(lbl, nav_labels[i]);
         lv_obj_set_style_text_color(lbl, i == 0 ? CLR_BG : CLR_TEXT_MID, 0);
@@ -840,6 +850,29 @@ void dashboard_ui_update(const DashData *d)
 }
 
 // ── Screen switch implementation ──────────────────────────────
+// Give a sub-screen a way back HOME: the whole screen is tap-to-return
+// (robust against z-order/hit-test quirks), plus a visible ◀ HOME button.
+static void prv_add_home_button(lv_obj_t *screen)
+{
+    lv_obj_add_flag(screen, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(screen, prv_nav_tap_cb, LV_EVENT_CLICKED, (void *)(intptr_t)DASH_SCREEN_HOME);
+
+    lv_obj_t *btn = lv_button_create(screen);
+    lv_obj_set_size(btn, 170, 56);
+    lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 14, 14);
+    lv_obj_set_style_bg_color(btn, CLR_CYAN, 0);
+    lv_obj_add_event_cb(btn, prv_nav_tap_cb, LV_EVENT_CLICKED, (void *)(intptr_t)DASH_SCREEN_HOME);
+    lv_obj_t *l = lv_label_create(btn);
+    lv_label_set_text(l, LV_SYMBOL_LEFT "  HOME");
+    lv_obj_set_style_text_color(l, CLR_BG, 0);
+    lv_obj_center(l);
+    lv_obj_move_foreground(btn);
+    // Also bubble the button's events up to the screen's handler above, so a
+    // direct tap on the button navigates home even if its own CLICKED doesn't
+    // propagate (observed LVGL hit-test quirk with the overlaid label).
+    lv_obj_add_flag(btn, LV_OBJ_FLAG_EVENT_BUBBLE);
+}
+
 static void prv_ensure_settings_screen(void)
 {
     if (s_scr_settings) return;
@@ -853,6 +886,7 @@ static void prv_ensure_settings_screen(void)
     lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
     lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+    prv_add_home_button(s_scr_settings);
 }
 
 static void prv_ensure_status_screen(void)
@@ -868,6 +902,7 @@ static void prv_ensure_status_screen(void)
     lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
     lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+    prv_add_home_button(s_scr_status);
 }
 
 extern "C" void dashboard_ui_set_screen(dash_screen_t screen)
