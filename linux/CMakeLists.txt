@@ -33,9 +33,10 @@ endif()
 set(REPO ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
 add_executable(dashboard
-  src/main_linux.c
+  src/main_linux.cpp
   src/stubs.cpp
   ${REPO}/src/dashboard_ui.cpp
+  ${REPO}/src/can_parser.cpp
   ${REPO}/src/lv_font_montserrat_72.c
   ${REPO}/src/lv_font_montserrat_110.c
 )

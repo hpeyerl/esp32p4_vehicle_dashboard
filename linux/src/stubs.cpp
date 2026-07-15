@@ -16,19 +16,10 @@
 #include <stdint.h>
 #include "gear_shifter.h"   // extern "C"  (clean, no ESP deps)
 #include "wifi_manager.h"   // extern "C"  (compat shim)
-#include "can_parser.h"     // DashData, g_dash, can_signal_stale (no extern "C")
 
-// Global dashboard-data instance (on ESP this lives in main.cpp). The UI's
-// dash_get_*() helpers read it directly, so the sim loop writes into it.
-DashData g_dash;
-
-// ESP impl lives in can_parser.cpp. Sim build: treat every signal as live so
-// the demo doesn't paint "stale" indicators over the synthesized data.
-bool can_signal_stale(uint32_t last_ms, uint32_t now_ms, uint32_t timeout_ms)
-{
-    (void)last_ms; (void)now_ms; (void)timeout_ms;
-    return false;
-}
+// NOTE: g_dash and can_signal_stale now come from the real can_parser.cpp,
+// which is compiled into the build (it also provides parse_can_frame for the
+// SocketCAN path). Don't redefine them here.
 
 // --- wifi_manager ---
 bool wifi_manager_is_connected(void) { return false; }

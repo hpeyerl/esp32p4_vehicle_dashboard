@@ -21,6 +21,12 @@
 #include <time.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <net/if.h>
+#include <linux/can.h>
+#include <linux/can/raw.h>
 
 #include "lvgl.h"
 #include "dashboard_ui.h"
@@ -52,6 +58,24 @@ static const char *find_touch_device(void)
     }
     closedir(d);
     return found;
+}
+
+// Open a non-blocking SocketCAN RAW socket bound to `iface`; -1 if unavailable.
+static int open_can_socket(const char *iface)
+{
+    int s = socket(PF_CAN, SOCK_RAW, CAN_RAW);
+    if (s < 0) return -1;
+    struct ifreq ifr;
+    memset(&ifr, 0, sizeof ifr);
+    strncpy(ifr.ifr_name, iface, IFNAMSIZ - 1);
+    if (ioctl(s, SIOCGIFINDEX, &ifr) < 0) { close(s); return -1; }
+    struct sockaddr_can addr;
+    memset(&addr, 0, sizeof addr);
+    addr.can_family  = AF_CAN;
+    addr.can_ifindex = ifr.ifr_ifindex;
+    if (bind(s, (struct sockaddr *)&addr, sizeof addr) < 0) { close(s); return -1; }
+    fcntl(s, F_SETFL, fcntl(s, F_GETFL, 0) | O_NONBLOCK);
+    return s;
 }
 
 // LVGL tick source: milliseconds from a monotonic clock.
@@ -109,28 +133,39 @@ int main(int argc, char **argv)
 
     // --- build the dashboard UI ---
     dashboard_ui_create(disp);
-    printf("dashboard UI created; entering sim loop\n");
 
-    // --- simulated data + render loop (mirrors the ESP SIM_DATA path) ---
-    // Write into the global g_dash (stubs.c) so the UI's direct dash_get_*()
-    // reads and the dashboard_ui_update() snapshot both see the sim data.
-    memset(&g_dash, 0, sizeof(g_dash));
+    // --- data source: real vehicle CAN (can0) if available, else simulated ---
+    const char *can_iface = getenv("CAN_IFACE");
+    if (!can_iface) can_iface = "can0";
+    int can_fd = open_can_socket(can_iface);
+    const bool use_can = (can_fd >= 0);
+    printf("data source: %s\n", use_can ? can_iface : "SIM (no CAN — sine-wave demo)");
+
+    // g_dash is defined + initialized in can_parser.cpp (dir_confirmed=INT8_MIN);
+    // do NOT memset it here. In CAN mode parse_can_frame() fills it from frames.
     float t = 0.0f;
     for (;;) {
-        t += 0.05f;
-        g_dash.soc_pct         = 50.0f + 45.0f * sinf(t * 0.3f);
-        g_dash.speed           = 60.0f + 50.0f * sinf(t * 0.7f);
-        g_dash.power_kw        = 150.0f * sinf(t * 1.1f);
-        g_dash.pack_volts      = 390.0f + 10.0f * sinf(t * 0.2f);
-        g_dash.pack_amps       = g_dash.power_kw * 1000.0f / g_dash.pack_volts;
-        g_dash.inverter_temp_c = 40.0f + 20.0f * sinf(t * 0.15f);
-        g_dash.motor_temp_c    = 60.0f + 30.0f * sinf(t * 0.2f);
-        g_dash.batt_temp_c     = 25.0f + 10.0f * sinf(t * 0.1f);
-        g_dash.aux_volts       = 13.5f + 0.5f * sinf(t * 0.4f);
-        g_dash.range_dist      = g_dash.soc_pct * 2.5f;
-        g_dash.gear            = 3;
-        g_dash.odo_total_miles = 12345.0f;
-        g_dash.trip_miles      = 42.0f;
+        if (use_can) {
+            // drain all pending frames -> the shared parser updates g_dash
+            struct can_frame fr;
+            while (read(can_fd, &fr, sizeof fr) == (ssize_t)sizeof fr)
+                parse_can_frame(fr.can_id & CAN_EFF_MASK, fr.data, millis_cb());
+        } else {
+            t += 0.05f;
+            g_dash.soc_pct         = 50.0f + 45.0f * sinf(t * 0.3f);
+            g_dash.speed           = 60.0f + 50.0f * sinf(t * 0.7f);
+            g_dash.power_kw        = 150.0f * sinf(t * 1.1f);
+            g_dash.pack_volts      = 390.0f + 10.0f * sinf(t * 0.2f);
+            g_dash.pack_amps       = g_dash.power_kw * 1000.0f / g_dash.pack_volts;
+            g_dash.inverter_temp_c = 40.0f + 20.0f * sinf(t * 0.15f);
+            g_dash.motor_temp_c    = 60.0f + 30.0f * sinf(t * 0.2f);
+            g_dash.batt_temp_c     = 25.0f + 10.0f * sinf(t * 0.1f);
+            g_dash.aux_volts       = 13.5f + 0.5f * sinf(t * 0.4f);
+            g_dash.range_dist      = g_dash.soc_pct * 2.5f;
+            g_dash.gear            = 3;
+            g_dash.odo_total_miles = 12345.0f;
+            g_dash.trip_miles      = 42.0f;
+        }
 
         // let a touched gear button override immediately (UI feedback)
         int8_t req = gear_shifter_current();

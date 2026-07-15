@@ -639,6 +639,7 @@ void dashboard_ui_create(lv_display_t *disp)
 // Forward declarations for screen helpers
 static void prv_ensure_settings_screen(void);
 static void prv_ensure_status_screen(void);
+static void prv_update_status(const DashData *d);
 
 // ── dashboard_ui_update ───────────────────────────────────────────────────
 void dashboard_ui_update(const DashData *d)
@@ -845,6 +846,9 @@ void dashboard_ui_update(const DashData *d)
         }
     }
 
+    // ── Status screen live values (cheap; no-ops until that screen is built) ─
+    prv_update_status(d);
+
     // ── Invalidate ────────────────────────────────────────────────────────
     lv_obj_invalidate(lv_screen_active());
 }
@@ -889,20 +893,76 @@ static void prv_ensure_settings_screen(void)
     prv_add_home_button(s_scr_settings);
 }
 
+// ── Status screen: clean live-values grid, fed from g_dash (CAN) ─────────
+enum { ST_SOC, ST_SPEED, ST_POWER, ST_PACKV, ST_PACKA, ST_RANGE,
+       ST_MOTOR, ST_INV, ST_BATT, ST_AUX, ST_GEAR, ST_ODO, ST_TRIP, ST_N };
+static const char *st_name[ST_N] = {
+    "SOC", "SPEED", "POWER", "PACK V", "PACK A", "RANGE",
+    "MOTOR", "INVERTER", "BATTERY", "AUX 12V", "GEAR", "ODO", "TRIP" };
+static lv_obj_t *s_st_val[ST_N];
+
 static void prv_ensure_status_screen(void)
 {
     if (s_scr_status) return;
     s_scr_status = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_scr_status, CLR_BG, 0);
     lv_obj_set_style_bg_opa(s_scr_status, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(s_scr_status, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *lbl = lv_label_create(s_scr_status);
-    lv_label_set_text(lbl, "Status\nUse browser: http://ev-dashboard.local/status-page");
-    lv_obj_set_style_text_color(lbl, CLR_TEXT_MID, 0);
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
-    lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_t *grid = lv_obj_create(s_scr_status);
+    lv_obj_set_size(grid, LCD_H_RES - 40, LCD_V_RES - 96);
+    lv_obj_align(grid, LV_ALIGN_BOTTOM_MID, 0, -12);
+    lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(grid, 0, 0);
+    lv_obj_set_style_pad_all(grid, 0, 0);
+    lv_obj_set_style_pad_row(grid, 12, 0);
+    lv_obj_set_style_pad_column(grid, 12, 0);
+    lv_obj_set_flex_flow(grid, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_clear_flag(grid, LV_OBJ_FLAG_SCROLLABLE);
+
+    const lv_coord_t card_w = (LCD_H_RES - 40 - 4 * 12) / 5;   // 5 cards per row
+    for (int i = 0; i < ST_N; i++) {
+        lv_obj_t *card = lv_obj_create(grid);
+        lv_obj_set_size(card, card_w, 118);
+        lv_obj_set_style_bg_color(card, CLR_PANEL, 0);
+        lv_obj_set_style_border_color(card, CLR_BORDER, 0);
+        lv_obj_set_style_border_width(card, 1, 0);
+        lv_obj_set_style_radius(card, 8, 0);
+        lv_obj_set_style_pad_all(card, 10, 0);
+        lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_t *nm = lv_label_create(card);
+        lv_label_set_text(nm, st_name[i]);
+        lv_obj_set_style_text_color(nm, CLR_TEXT_MID, 0);
+        lv_obj_set_style_text_font(nm, &lv_font_montserrat_18, 0);
+        lv_obj_align(nm, LV_ALIGN_TOP_LEFT, 0, 0);
+        lv_obj_t *vl = lv_label_create(card);
+        lv_label_set_text(vl, "--");
+        lv_obj_set_style_text_color(vl, CLR_TEXT_BRIGHT, 0);
+        lv_obj_set_style_text_font(vl, &lv_font_montserrat_40, 0);
+        lv_obj_align(vl, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+        s_st_val[i] = vl;
+    }
     prv_add_home_button(s_scr_status);
+}
+
+static void prv_update_status(const DashData *d)
+{
+    if (!s_st_val[0]) return;   // status screen not built yet
+    static const char *gnm[] = {"P", "R", "N", "D"};
+    char b[24];
+    snprintf(b, sizeof b, "%.0f %%", d->soc_pct);         lv_label_set_text(s_st_val[ST_SOC],   b);
+    snprintf(b, sizeof b, "%.0f",    d->speed);           lv_label_set_text(s_st_val[ST_SPEED], b);
+    snprintf(b, sizeof b, "%.0f kW", d->power_kw);        lv_label_set_text(s_st_val[ST_POWER], b);
+    snprintf(b, sizeof b, "%.0f V",  d->pack_volts);      lv_label_set_text(s_st_val[ST_PACKV], b);
+    snprintf(b, sizeof b, "%.0f A",  d->pack_amps);       lv_label_set_text(s_st_val[ST_PACKA], b);
+    snprintf(b, sizeof b, "%.0f mi", d->range_dist);      lv_label_set_text(s_st_val[ST_RANGE], b);
+    snprintf(b, sizeof b, "%.0f C",  d->motor_temp_c);    lv_label_set_text(s_st_val[ST_MOTOR], b);
+    snprintf(b, sizeof b, "%.0f C",  d->inverter_temp_c); lv_label_set_text(s_st_val[ST_INV],   b);
+    snprintf(b, sizeof b, "%.0f C",  d->batt_temp_c);     lv_label_set_text(s_st_val[ST_BATT],  b);
+    snprintf(b, sizeof b, "%.1f V",  d->aux_volts);       lv_label_set_text(s_st_val[ST_AUX],   b);
+    lv_label_set_text(s_st_val[ST_GEAR], d->gear < 4 ? gnm[d->gear] : "-");
+    snprintf(b, sizeof b, "%.0f",    d->odo_total_miles); lv_label_set_text(s_st_val[ST_ODO],   b);
+    snprintf(b, sizeof b, "%.1f",    d->trip_miles);      lv_label_set_text(s_st_val[ST_TRIP],  b);
 }
 
 extern "C" void dashboard_ui_set_screen(dash_screen_t screen)
