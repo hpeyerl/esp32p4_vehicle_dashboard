@@ -82,6 +82,7 @@ static lv_obj_t *s_lbl_speed   = NULL;
 static lv_obj_t *s_lbl_prnd[4];
 static lv_obj_t *s_lbl_range_badge = NULL;   // M5Dial hi/lo range (display only)
 static lv_obj_t *s_lbl_motor_badge = NULL;   // M5Dial motor config (display only)
+static void prv_add_arrow_nav(lv_obj_t *screen);   // fwd decl (used in home builder)
 static lv_obj_t *s_lbl_cruise    = NULL;  // cruise speed target
 static lv_obj_t *s_lbl_cruise_st = NULL;  // CC / SET / RES indicator
 static lv_obj_t *s_lbl_eff     = NULL;
@@ -612,10 +613,8 @@ void dashboard_ui_create(lv_display_t *disp)
             lv_obj_set_style_bg_opa(s_lbl_prnd[i], LV_OPA_TRANSP, 0);
             lv_obj_set_pos(s_lbl_prnd[i],
                            panel_cx + x_off[i] - prnd_shift - 22, prnd_y - 8);
-            lv_obj_add_flag(s_lbl_prnd[i], LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_set_ext_click_area(s_lbl_prnd[i], 16);
-            lv_obj_add_event_cb(s_lbl_prnd[i], prv_gear_tap_cb,
-                                LV_EVENT_CLICKED, (void *)(intptr_t)i);
+            // Read-only: the M5Dial is the shifter. PRND just reflects
+            // selected gear (cyan, from 0x312) + confirmed dir (box, from VCU).
         }
         lv_obj_set_style_text_color(s_lbl_prnd[0], CLR_CYAN, 0);
 
@@ -680,11 +679,14 @@ void dashboard_ui_create(lv_display_t *disp)
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
         lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 0);
     }
+
+    prv_add_arrow_nav(scr);
 }
 // Forward declarations for screen helpers
 static void prv_ensure_settings_screen(void);
 static void prv_ensure_status_screen(void);
 static void prv_update_status(const DashData *d);
+static void prv_add_arrow_nav(lv_obj_t *screen);
 #ifdef BMS_HTTP
 static lv_obj_t *s_scr_bms = NULL;
 static void prv_ensure_bms_screen(void);
@@ -958,6 +960,54 @@ void dashboard_ui_update(const DashData *d)
 // ── Screen switch implementation ──────────────────────────────
 // Give a sub-screen a way back HOME: the whole screen is tap-to-return
 // (robust against z-order/hit-test quirks), plus a visible ◀ HOME button.
+// Prev/next screen cycling for the far-right arrow buttons.
+static void prv_nav_arrow_cb(lv_event_t *e)
+{
+    int dir = (int)(intptr_t)lv_event_get_user_data(e);
+#ifdef BMS_HTTP
+    static const dash_screen_t order[] = { DASH_SCREEN_HOME, DASH_SCREEN_STATUS,
+                                           DASH_SCREEN_BMS, DASH_SCREEN_SETTINGS };
+#else
+    static const dash_screen_t order[] = { DASH_SCREEN_HOME, DASH_SCREEN_STATUS,
+                                           DASH_SCREEN_SETTINGS };
+#endif
+    const int n = (int)(sizeof(order) / sizeof(order[0]));
+    dash_screen_t cur = dashboard_ui_get_screen();
+    int idx = 0;
+    for (int i = 0; i < n; i++) if (order[i] == cur) { idx = i; break; }
+    idx = (idx + dir + n) % n;
+    dashboard_ui_set_screen(order[idx]);
+}
+
+// Two thumb-friendly ◀ ▶ buttons at far-right-middle to cycle screens.
+static void prv_add_arrow_nav(lv_obj_t *screen)
+{
+    const struct { const char *sym; int dir; int xoff; } b[2] = {
+        { LV_SYMBOL_LEFT,  -1, -62 },
+        { LV_SYMBOL_RIGHT, +1,  -6 },
+    };
+    for (int i = 0; i < 2; i++) {
+        lv_obj_t *btn = lv_obj_create(screen);
+        lv_obj_set_size(btn, 52, 52);
+        lv_obj_align(btn, LV_ALIGN_RIGHT_MID, b[i].xoff, 0);
+        lv_obj_set_style_bg_color(btn, CLR_PANEL, 0);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(btn, CLR_CYAN, 0);
+        lv_obj_set_style_border_width(btn, 1, 0);
+        lv_obj_set_style_radius(btn, 10, 0);
+        lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_ext_click_area(btn, 12);
+        lv_obj_add_event_cb(btn, prv_nav_arrow_cb, LV_EVENT_CLICKED,
+                            (void *)(intptr_t)b[i].dir);
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, b[i].sym);
+        lv_obj_set_style_text_color(lbl, CLR_CYAN, 0);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+        lv_obj_center(lbl);
+    }
+}
+
 static void prv_add_home_button(lv_obj_t *screen)
 {
     lv_obj_add_flag(screen, LV_OBJ_FLAG_CLICKABLE);
@@ -993,6 +1043,7 @@ static void prv_ensure_settings_screen(void)
     lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
     prv_add_home_button(s_scr_settings);
+    prv_add_arrow_nav(s_scr_settings);
 }
 
 // ── Status screen: clean live-values grid, fed from g_dash (CAN) ─────────
@@ -1045,6 +1096,7 @@ static void prv_ensure_status_screen(void)
         s_st_val[i] = vl;
     }
     prv_add_home_button(s_scr_status);
+    prv_add_arrow_nav(s_scr_status);
 }
 
 static void prv_update_status(const DashData *d)
@@ -1209,6 +1261,7 @@ static void prv_ensure_bms_screen(void)
         }
     }
     prv_add_home_button(s_scr_bms);
+    prv_add_arrow_nav(s_scr_bms);
 }
 
 static void prv_update_bms(void)
