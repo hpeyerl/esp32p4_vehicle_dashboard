@@ -13,6 +13,7 @@ typedef enum {
     DASH_SCREEN_HOME     = 0,
     DASH_SCREEN_SETTINGS = 1,
     DASH_SCREEN_STATUS   = 2,
+    DASH_SCREEN_BMS      = 3,
 } dash_screen_t;
 
 // Create all LVGL widgets. Call once after lv_init() and display setup.

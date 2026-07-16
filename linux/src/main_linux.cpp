@@ -32,6 +32,7 @@
 #include "dashboard_ui.h"
 #include "can_parser.h"      // DashData
 #include "gear_shifter.h"    // gear_shifter_current()
+#include "bms_http.h"        // bms_http_poll()
 
 // Auto-detect the touchscreen's evdev node by scanning input device names.
 // Returns a static "/dev/input/eventN" path, or NULL if none found.
@@ -170,6 +171,9 @@ int main(int argc, char **argv)
         // let a touched gear button override immediately (UI feedback)
         int8_t req = gear_shifter_current();
         if (req >= 0) g_dash.gear = (uint8_t)req;
+
+        // poll the BMW i3 BMS web API (only while the BMS screen is showing)
+        bms_http_poll(millis_cb(), dashboard_ui_get_screen() == DASH_SCREEN_BMS);
 
         dashboard_ui_update(&g_dash);
         lv_timer_handler();

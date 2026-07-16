@@ -7,7 +7,7 @@
 #include <string.h>
 
 // Global dashboard data instance
-DashData g_dash = { .dir_confirmed = INT8_MIN };
+DashData g_dash = { .hl_mode = -1, .mg_mode = -1, .dir_confirmed = INT8_MIN };
 
 // ── Intel (LE) signal extraction ──────────────────────────────────────────
 static uint64_t extract_le(const uint8_t *data, uint8_t start_bit, uint8_t len)
@@ -110,6 +110,14 @@ void parse_can_frame(uint32_t id, const uint8_t *data, uint32_t now_ms)
         g_dash.gear = (data[SIG_GEAR_BYTE] >> SIG_GEAR_SHIFT) & SIG_GEAR_MASK;
         if (g_dash.gear > 3) g_dash.gear = 0;
         g_dash.last_ms_0x312 = now_ms;
+        break;
+
+    case CAN_ID_RANGE:                             // 0x300 M5Dial hi/lo range
+        g_dash.hl_mode = (int8_t)(data[0] & 0x03);
+        break;
+
+    case CAN_ID_MOTOR:                             // 0x301 M5Dial motor config
+        g_dash.mg_mode = (int8_t)(data[0] & 0x03);
         break;
 
     // TODO: add case for Zombieverter dir signal (CAN ID TBD via oic)

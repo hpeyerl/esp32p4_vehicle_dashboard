@@ -37,6 +37,10 @@ typedef struct {
     // Gear:  0=P  1=R  2=N  3=D
     uint8_t gear;          // requested gear from shifter (0x312)
 
+    // M5Dial shifter aux pages (display only). -1 = not yet received.
+    int8_t  hl_mode;       // hi/lo range   0=L 1=H 2=A 3=HL   (0x300 data[0])
+    int8_t  mg_mode;       // motor config  0=MG1+2 1=MG1 2=MG2 3=Blend (0x301 data[0])
+
     // Cruise control
     uint8_t cruise_state;  // CRUISE_CC_* bitmask from cruisestt
     float   cruise_kph;    // target speed in kph (converted from cruisespeed RPM)

@@ -18,6 +18,8 @@
 #define CAN_ID_SOC              0x355   // State of charge
 #define CAN_ID_AUX_BATT         0x210   // 12V auxiliary battery voltage
 #define CAN_ID_GEAR             0x312   // JLR G1 shifter PRND
+#define CAN_ID_RANGE            0x300   // M5Dial: hi/lo range  L/H/A/HL  (data[0])
+#define CAN_ID_MOTOR            0x301   // M5Dial: motor config MG1+2/MG1/MG2/Blend (data[0])
 
 // Cruise control — Zombieverter cruisespeed + cruisestt
 // CAN IDs TBD — add via oic and update these
@@ -31,17 +33,17 @@
 //  Physical value = (raw * scale) + offset
 // -------------------------------------------------------------
 
-// 0x125  Motor Temp  — bits 32-47, scale 1, signed, °C
+// 0x125  Motor Temp  — bits 32-47, scale 0.01, signed, °C
 #define SIG_MOTOR_TEMP_START    32
 #define SIG_MOTOR_TEMP_LEN      16
-#define SIG_MOTOR_TEMP_SCALE    1.0f
+#define SIG_MOTOR_TEMP_SCALE    0.01f
 #define SIG_MOTOR_TEMP_OFFSET   0.0f
 #define SIG_MOTOR_TEMP_SIGNED   true
 
-// 0x126  Inverter Temp — bits 32-47, scale 1, signed, °C
+// 0x126  Inverter Temp — bits 32-47, scale 0.01, signed, °C
 #define SIG_INV_TEMP_START      32
 #define SIG_INV_TEMP_LEN        16
-#define SIG_INV_TEMP_SCALE      1.0f
+#define SIG_INV_TEMP_SCALE      0.01f
 #define SIG_INV_TEMP_OFFSET     0.0f
 #define SIG_INV_TEMP_SIGNED     true
 
@@ -52,10 +54,10 @@
 #define SIG_SPEED_OFFSET        0.0f
 #define SIG_SPEED_SIGNED        true
 
-// 0x356  Pack Voltage — bits 0-15, scale 0.1, unsigned, V
+// 0x356  Pack Voltage — bits 0-15, scale 0.01, unsigned, V
 #define SIG_PACK_VOLTS_START    0
 #define SIG_PACK_VOLTS_LEN      16
-#define SIG_PACK_VOLTS_SCALE    0.1f
+#define SIG_PACK_VOLTS_SCALE    0.01f
 #define SIG_PACK_VOLTS_OFFSET   0.0f
 #define SIG_PACK_VOLTS_SIGNED   false
 

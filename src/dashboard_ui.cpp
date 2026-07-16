@@ -29,6 +29,9 @@
 #include <stdio.h>
 #include <math.h>
 #include <cstring>
+#ifdef BMS_HTTP
+#include "bms_data.h"
+#endif
 
 LV_FONT_DECLARE(lv_font_montserrat_72)
 LV_FONT_DECLARE(lv_font_montserrat_110)
@@ -77,6 +80,8 @@ static lv_obj_t *s_bar_pwr     = NULL;
 static lv_obj_t *s_lbl_pwr_val = NULL;
 static lv_obj_t *s_lbl_speed   = NULL;
 static lv_obj_t *s_lbl_prnd[4];
+static lv_obj_t *s_lbl_range_badge = NULL;   // M5Dial hi/lo range (display only)
+static lv_obj_t *s_lbl_motor_badge = NULL;   // M5Dial motor config (display only)
 static lv_obj_t *s_lbl_cruise    = NULL;  // cruise speed target
 static lv_obj_t *s_lbl_cruise_st = NULL;  // CC / SET / RES indicator
 static lv_obj_t *s_lbl_eff     = NULL;
@@ -590,17 +595,51 @@ void dashboard_ui_create(lv_display_t *disp)
         lv_coord_t panel_cx  = W - RIGHT_W / 2;
         lv_coord_t prnd_y    = MAIN_H - 110;   // above indicators at MAIN_H-42
         const char *gnames[] = {"P","R","N","D"};
-        int x_off[]          = {-60, -20, 20, 60};
+        // Wider spacing (60px vs 40) + shift the whole cluster left so "D"
+        // isn't jammed against the right edge and each letter is an easy,
+        // non-overlapping tap target.
+        int x_off[]                 = {-90, -30, 30, 90};
+        const lv_coord_t prnd_shift = 40;
         for (int i = 0; i < 4; i++) {
             s_lbl_prnd[i] = make_label(scr, gnames[i], CLR_TEXT_DIM,
                                         &lv_font_montserrat_40);
-            lv_obj_set_pos(s_lbl_prnd[i], panel_cx + x_off[i] - 14, prnd_y);
+            // Constant padding + (transparent) panel background: the "acked"
+            // box is toggled on in the update by just flipping bg opacity, so
+            // the glyph never shifts. Position compensates for the 8px pad.
+            lv_obj_set_style_pad_all(s_lbl_prnd[i], 8, 0);
+            lv_obj_set_style_radius(s_lbl_prnd[i], 8, 0);
+            lv_obj_set_style_bg_color(s_lbl_prnd[i], CLR_PANEL, 0);
+            lv_obj_set_style_bg_opa(s_lbl_prnd[i], LV_OPA_TRANSP, 0);
+            lv_obj_set_pos(s_lbl_prnd[i],
+                           panel_cx + x_off[i] - prnd_shift - 22, prnd_y - 8);
             lv_obj_add_flag(s_lbl_prnd[i], LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_set_ext_click_area(s_lbl_prnd[i], 20);
+            lv_obj_set_ext_click_area(s_lbl_prnd[i], 16);
             lv_obj_add_event_cb(s_lbl_prnd[i], prv_gear_tap_cb,
                                 LV_EVENT_CLICKED, (void *)(intptr_t)i);
         }
         lv_obj_set_style_text_color(s_lbl_prnd[0], CLR_CYAN, 0);
+
+        // Range + motor-config badges (display only) above the PRND row.
+        lv_coord_t cluster_cx = panel_cx - prnd_shift;
+        lv_coord_t badge_y    = prnd_y - 46;
+        lv_obj_t  *rcap = make_label(scr, "RANGE", CLR_TEXT_MID, &lv_font_montserrat_10);
+        lv_obj_set_pos(rcap, cluster_cx - 84, badge_y - 13);
+        lv_obj_t  *mcap = make_label(scr, "MOTOR", CLR_TEXT_MID, &lv_font_montserrat_10);
+        lv_obj_set_pos(mcap, cluster_cx + 14, badge_y - 13);
+
+        s_lbl_range_badge = make_label(scr, "--", CLR_TEXT_BRIGHT, &lv_font_montserrat_18);
+        lv_obj_set_style_bg_color(s_lbl_range_badge, CLR_PANEL, 0);
+        lv_obj_set_style_bg_opa(s_lbl_range_badge, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(s_lbl_range_badge, 6, 0);
+        lv_obj_set_style_pad_all(s_lbl_range_badge, 4, 0);
+        lv_obj_set_pos(s_lbl_range_badge, cluster_cx - 84, badge_y);
+
+        s_lbl_motor_badge = make_label(scr, "--", CLR_TEXT_BRIGHT, &lv_font_montserrat_18);
+        lv_obj_set_style_bg_color(s_lbl_motor_badge, CLR_PANEL, 0);
+        lv_obj_set_style_bg_opa(s_lbl_motor_badge, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(s_lbl_motor_badge, 6, 0);
+        lv_obj_set_style_pad_all(s_lbl_motor_badge, 4, 0);
+        lv_obj_set_pos(s_lbl_motor_badge, cluster_cx + 14, badge_y);
     }
 
     // ── Bottom nav bar ────────────────────────────────────────────────────
@@ -617,11 +656,17 @@ void dashboard_ui_create(lv_display_t *disp)
     lv_obj_clear_flag(nav, LV_OBJ_FLAG_SCROLLABLE);
 
     // Nav icons — stub labels for now, replaced by icons when screens exist
+#ifdef BMS_HTTP
+    const char *nav_labels[] = {"  HOME  ", "SETTINGS", " STATUS ", "  BMS   "};
+    const int   nav_cnt = 4;
+#else
     const char *nav_labels[] = {"  HOME  ", "SETTINGS", " STATUS "};
-    for (int i = 0; i < NAV_ICON_CNT; i++) {
+    const int   nav_cnt = NAV_ICON_CNT;
+#endif
+    for (int i = 0; i < nav_cnt; i++) {
         lv_obj_t *btn = lv_obj_create(nav);
         lv_obj_set_size(btn, NAV_ICON_W, BOT_H - 4);
-        lv_obj_set_pos(btn, W/2 - (NAV_ICON_CNT * NAV_ICON_W)/2 + i * NAV_ICON_W, 2);
+        lv_obj_set_pos(btn, W/2 - (nav_cnt * NAV_ICON_W)/2 + i * NAV_ICON_W, 2);
         lv_obj_set_style_bg_color(btn, i == 0 ? CLR_CYAN : CLR_PANEL, 0);
         lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
         lv_obj_set_style_border_width(btn, 0, 0);
@@ -640,6 +685,11 @@ void dashboard_ui_create(lv_display_t *disp)
 static void prv_ensure_settings_screen(void);
 static void prv_ensure_status_screen(void);
 static void prv_update_status(const DashData *d);
+#ifdef BMS_HTTP
+static lv_obj_t *s_scr_bms = NULL;
+static void prv_ensure_bms_screen(void);
+static void prv_update_bms(void);
+#endif
 
 // ── dashboard_ui_update ───────────────────────────────────────────────────
 void dashboard_ui_update(const DashData *d)
@@ -659,6 +709,13 @@ void dashboard_ui_update(const DashData *d)
                 prv_ensure_status_screen();
                 lv_screen_load(s_scr_status);
                 break;
+#ifdef BMS_HTTP
+            case DASH_SCREEN_BMS:
+                prv_ensure_bms_screen();
+                lv_screen_load(s_scr_bms);
+                break;
+#endif
+            default: break;
         }
         s_cur_screen = s_pending_screen;
     }
@@ -745,14 +802,43 @@ void dashboard_ui_update(const DashData *d)
     lv_label_set_text(s_lbl_speed, buf);
 
     // ── Gear ──────────────────────────────────────────────────────────────
-    static int last_gear = -1;
-    const char *gnames[] = {"P","R","N","D"};
+    // Optimistic gear ack, matching the M5Dial JLR shifter
+    // (m5dial-jlr1-shifter): the Zombie has no dedicated gear-ack broadcast,
+    // so a selection is treated as acked GEAR_ACK_MS after it changes. Cyan =
+    // selected (immediate); Home-button-style box = acked (after the delay).
+    const uint32_t GEAR_ACK_MS = 200;
+    uint32_t now_ms = lv_tick_get();
+    static int      last_gear  = -1;
+    static int      last_boxed = -2;
+    static int      gear_prev  = -1;
+    static uint32_t gear_ms    = 0;
     int g = (d->gear >= 0 && d->gear < 4) ? d->gear : 0;
-    if (g != last_gear) {
-        for (int i = 0; i < 4; i++)
+    if (g != gear_prev) { gear_prev = g; gear_ms = now_ms; }
+    int boxed = ((uint32_t)(now_ms - gear_ms) >= GEAR_ACK_MS) ? g : -1;
+    if (g != last_gear || boxed != last_boxed) {
+        for (int i = 0; i < 4; i++) {
             lv_obj_set_style_text_color(s_lbl_prnd[i],
                 i == g ? CLR_CYAN : CLR_TEXT_DIM, 0);
-        last_gear = g;
+            lv_obj_set_style_bg_opa(s_lbl_prnd[i],
+                i == boxed ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+        }
+        last_gear  = g;
+        last_boxed = boxed;
+    }
+
+    // ── Range + motor-config badges (M5Dial aux pages, display only) ───────
+    static const char *hl_names[4] = { "LOW", "HIGH", "AUTO", "HI-LO" };
+    static const char *mg_names[4] = { "MG1+2", "MG1", "MG2", "BLEND" };
+    static int last_hl = -2, last_mg = -2;
+    if (s_lbl_range_badge && d->hl_mode != last_hl) {
+        lv_label_set_text(s_lbl_range_badge,
+            (d->hl_mode >= 0 && d->hl_mode < 4) ? hl_names[d->hl_mode] : "--");
+        last_hl = d->hl_mode;
+    }
+    if (s_lbl_motor_badge && d->mg_mode != last_mg) {
+        lv_label_set_text(s_lbl_motor_badge,
+            (d->mg_mode >= 0 && d->mg_mode < 4) ? mg_names[d->mg_mode] : "--");
+        last_mg = d->mg_mode;
     }
 
     // ── Power arc ─────────────────────────────────────────────────────────
@@ -848,6 +934,9 @@ void dashboard_ui_update(const DashData *d)
 
     // ── Status screen live values (cheap; no-ops until that screen is built) ─
     prv_update_status(d);
+#ifdef BMS_HTTP
+    prv_update_bms();   // no-op until BMS screen built
+#endif
 
     // ── Invalidate ────────────────────────────────────────────────────────
     lv_obj_invalidate(lv_screen_active());
@@ -964,6 +1053,192 @@ static void prv_update_status(const DashData *d)
     snprintf(b, sizeof b, "%.0f",    d->odo_total_miles); lv_label_set_text(s_st_val[ST_ODO],   b);
     snprintf(b, sizeof b, "%.1f",    d->trip_miles);      lv_label_set_text(s_st_val[ST_TRIP],  b);
 }
+
+#ifdef BMS_HTTP
+// ── BMS screen: pack summary + per-module cell grid (from HTTP /api/data) ──
+#define BMS_UI_MODS   8
+#define BMS_UI_CELLS  12
+enum { BS_PACK, BS_SOC, BS_LOW, BS_HIGH, BS_DELTA, BS_TEMP, BS_CURR, BS_N };
+static const char *bs_name[BS_N] =
+    { "PACK", "SOC", "MIN CELL", "MAX CELL", "DELTA", "AVG TEMP", "CURRENT" };
+static lv_obj_t *s_bms_sumval[BS_N];
+static lv_obj_t *s_bms_modcard[BMS_UI_MODS];
+static lv_obj_t *s_bms_modv[BMS_UI_MODS];
+static lv_obj_t *s_bms_modt[BMS_UI_MODS];
+static lv_obj_t *s_bms_cell[BMS_UI_MODS][BMS_UI_CELLS];
+static lv_obj_t *s_bms_celllbl[BMS_UI_MODS][BMS_UI_CELLS];
+
+// f: 0 (lowest cell) .. 1 (highest cell). blue -> green -> red, dimmed by scale.
+static lv_color_t bms_heat(float f, float scale)
+{
+    if (f < 0) f = 0; if (f > 1) f = 1;
+    float r, g, bl;
+    if (f < 0.5f) { float u = f / 0.5f;
+        r  = 0x22 + u * (0x10 - 0x22);
+        g  = 0x66 + u * (0xB9 - 0x66);
+        bl = 0xEF + u * (0x81 - 0xEF);
+    } else { float u = (f - 0.5f) / 0.5f;
+        r  = 0x10 + u * (0xEF - 0x10);
+        g  = 0xB9 + u * (0x44 - 0xB9);
+        bl = 0x81 + u * (0x44 - 0x81);
+    }
+    return lv_color_make((uint8_t)(r * scale), (uint8_t)(g * scale), (uint8_t)(bl * scale));
+}
+
+static void prv_ensure_bms_screen(void)
+{
+    if (s_scr_bms) return;
+    const lv_coord_t W = LCD_H_RES, H = LCD_V_RES;
+    s_scr_bms = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(s_scr_bms, CLR_BG, 0);
+    lv_obj_set_style_bg_opa(s_scr_bms, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(s_scr_bms, LV_OBJ_FLAG_SCROLLABLE);
+
+    // ── summary strip ──
+    lv_obj_t *sum = lv_obj_create(s_scr_bms);
+    lv_obj_set_size(sum, W - 24, 92);
+    lv_obj_align(sum, LV_ALIGN_TOP_MID, 0, 10);
+    lv_obj_set_style_bg_opa(sum, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(sum, 0, 0);
+    lv_obj_set_style_pad_all(sum, 0, 0);
+    lv_obj_set_style_pad_column(sum, 8, 0);
+    lv_obj_set_flex_flow(sum, LV_FLEX_FLOW_ROW);
+    lv_obj_clear_flag(sum, LV_OBJ_FLAG_SCROLLABLE);
+    for (int i = 0; i < BS_N; i++) {
+        lv_obj_t *tile = lv_obj_create(sum);
+        lv_obj_set_flex_grow(tile, 1);
+        lv_obj_set_height(tile, LV_PCT(100));
+        lv_obj_set_style_bg_color(tile, CLR_PANEL, 0);
+        lv_obj_set_style_border_color(tile, CLR_BORDER, 0);
+        lv_obj_set_style_border_width(tile, 1, 0);
+        lv_obj_set_style_radius(tile, 8, 0);
+        lv_obj_set_style_pad_all(tile, 8, 0);
+        lv_obj_clear_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_t *nm = lv_label_create(tile);
+        lv_label_set_text(nm, bs_name[i]);
+        lv_obj_set_style_text_color(nm, CLR_TEXT_MID, 0);
+        lv_obj_set_style_text_font(nm, &lv_font_montserrat_14, 0);
+        lv_obj_align(nm, LV_ALIGN_TOP_LEFT, 0, 0);
+        lv_obj_t *vl = lv_label_create(tile);
+        lv_label_set_text(vl, "--");
+        lv_obj_set_style_text_color(vl, CLR_TEXT_BRIGHT, 0);
+        lv_obj_set_style_text_font(vl, &lv_font_montserrat_24, 0);
+        lv_obj_align(vl, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+        s_bms_sumval[i] = vl;
+    }
+
+    // ── module cards ──
+    lv_obj_t *mods = lv_obj_create(s_scr_bms);
+    lv_obj_set_size(mods, W - 24, H - BOT_H - 92 - 34);
+    lv_obj_align(mods, LV_ALIGN_TOP_MID, 0, 110);
+    lv_obj_set_style_bg_opa(mods, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(mods, 0, 0);
+    lv_obj_set_style_pad_all(mods, 0, 0);
+    lv_obj_set_style_pad_column(mods, 8, 0);
+    lv_obj_set_flex_flow(mods, LV_FLEX_FLOW_ROW);
+    lv_obj_clear_flag(mods, LV_OBJ_FLAG_SCROLLABLE);
+
+    for (int m = 0; m < BMS_UI_MODS; m++) {
+        lv_obj_t *card = lv_obj_create(mods);
+        s_bms_modcard[m] = card;
+        lv_obj_set_flex_grow(card, 1);
+        lv_obj_set_height(card, LV_PCT(100));
+        lv_obj_set_style_bg_color(card, CLR_PANEL, 0);
+        lv_obj_set_style_border_color(card, CLR_BORDER, 0);
+        lv_obj_set_style_border_width(card, 1, 0);
+        lv_obj_set_style_radius(card, 8, 0);
+        lv_obj_set_style_pad_all(card, 6, 0);
+        lv_obj_set_style_pad_row(card, 3, 0);
+        lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+        lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+        char hb[16]; snprintf(hb, sizeof hb, "M%d", m + 1);
+        lv_obj_t *hdr = lv_label_create(card);
+        lv_label_set_text(hdr, hb);
+        lv_obj_set_style_text_color(hdr, CLR_CYAN, 0);
+        lv_obj_set_style_text_font(hdr, &lv_font_montserrat_18, 0);
+        lv_obj_t *mv = lv_label_create(card);
+        lv_label_set_text(mv, "--");
+        lv_obj_set_style_text_color(mv, CLR_TEXT_BRIGHT, 0);
+        lv_obj_set_style_text_font(mv, &lv_font_montserrat_14, 0);
+        s_bms_modv[m] = mv;
+        lv_obj_t *mt = lv_label_create(card);
+        lv_label_set_text(mt, "--");
+        lv_obj_set_style_text_color(mt, CLR_TEXT_MID, 0);
+        lv_obj_set_style_text_font(mt, &lv_font_montserrat_14, 0);
+        s_bms_modt[m] = mt;
+
+        lv_obj_t *cg = lv_obj_create(card);
+        lv_obj_set_width(cg, LV_PCT(100));
+        lv_obj_set_flex_grow(cg, 1);
+        lv_obj_set_style_bg_opa(cg, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(cg, 0, 0);
+        lv_obj_set_style_pad_all(cg, 0, 0);
+        lv_obj_set_style_pad_row(cg, 3, 0);
+        lv_obj_set_style_pad_column(cg, 3, 0);
+        lv_obj_set_flex_flow(cg, LV_FLEX_FLOW_ROW_WRAP);
+        lv_obj_clear_flag(cg, LV_OBJ_FLAG_SCROLLABLE);
+        for (int c = 0; c < BMS_UI_CELLS; c++) {
+            lv_obj_t *cell = lv_obj_create(cg);
+            lv_obj_set_size(cell, LV_PCT(48), LV_PCT(15));
+            lv_obj_set_style_bg_color(cell, CLR_BG, 0);
+            lv_obj_set_style_border_width(cell, 0, 0);
+            lv_obj_set_style_radius(cell, 4, 0);
+            lv_obj_set_style_pad_all(cell, 0, 0);
+            lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
+            s_bms_cell[m][c] = cell;
+            lv_obj_t *cl = lv_label_create(cell);
+            lv_label_set_text(cl, "--");
+            lv_obj_set_style_text_color(cl, CLR_TEXT_BRIGHT, 0);
+            lv_obj_set_style_text_font(cl, &lv_font_montserrat_14, 0);
+            lv_obj_center(cl);
+            s_bms_celllbl[m][c] = cl;
+        }
+    }
+    prv_add_home_button(s_scr_bms);
+}
+
+static void prv_update_bms(void)
+{
+    if (!s_bms_sumval[BS_PACK]) return;   // screen not built yet
+    char b[24];
+    if (!g_bms.valid) {
+        lv_label_set_text(s_bms_sumval[BS_PACK], "...");
+        return;
+    }
+    float lo = g_bms.lowCell, hi = g_bms.highCell;
+    float span = hi - lo; if (span < 0.001f) span = 0.001f;
+
+    snprintf(b, sizeof b, "%.1f V", g_bms.packV);    lv_label_set_text(s_bms_sumval[BS_PACK], b);
+    snprintf(b, sizeof b, "%.1f %%", g_bms.soc);     lv_label_set_text(s_bms_sumval[BS_SOC],  b);
+    snprintf(b, sizeof b, "%.3f", lo);               lv_label_set_text(s_bms_sumval[BS_LOW],  b);
+    snprintf(b, sizeof b, "%.3f", hi);               lv_label_set_text(s_bms_sumval[BS_HIGH], b);
+    int dmv = (int)((hi - lo) * 1000.0f + 0.5f);
+    snprintf(b, sizeof b, "%d mV", dmv);             lv_label_set_text(s_bms_sumval[BS_DELTA], b);
+    lv_obj_set_style_text_color(s_bms_sumval[BS_DELTA],
+        dmv < 30 ? CLR_GREEN : dmv < 100 ? CLR_ORANGE : CLR_RED, 0);
+    snprintf(b, sizeof b, "%.1f C", g_bms.avgTemp);  lv_label_set_text(s_bms_sumval[BS_TEMP], b);
+    snprintf(b, sizeof b, "%.1f A", g_bms.currentA); lv_label_set_text(s_bms_sumval[BS_CURR], b);
+
+    int nm = g_bms.numModules; if (nm > BMS_UI_MODS) nm = BMS_UI_MODS;
+    for (int m = 0; m < BMS_UI_MODS; m++) {
+        if (m >= nm) { lv_obj_add_flag(s_bms_modcard[m], LV_OBJ_FLAG_HIDDEN); continue; }
+        lv_obj_clear_flag(s_bms_modcard[m], LV_OBJ_FLAG_HIDDEN);
+        BmsModule *bm = &g_bms.modules[m];
+        snprintf(b, sizeof b, "%.2f V", bm->voltage);     lv_label_set_text(s_bms_modv[m], b);
+        snprintf(b, sizeof b, "%d/%d C", bm->t1, bm->t2); lv_label_set_text(s_bms_modt[m], b);
+        lv_obj_set_style_border_color(s_bms_modcard[m], bm->faulted ? CLR_RED : CLR_BORDER, 0);
+        int nc = bm->num_cells; if (nc > BMS_UI_CELLS) nc = BMS_UI_CELLS;
+        for (int c = 0; c < BMS_UI_CELLS; c++) {
+            if (c >= nc) { lv_obj_add_flag(s_bms_cell[m][c], LV_OBJ_FLAG_HIDDEN); continue; }
+            lv_obj_clear_flag(s_bms_cell[m][c], LV_OBJ_FLAG_HIDDEN);
+            float v = bm->cells[c];
+            lv_obj_set_style_bg_color(s_bms_cell[m][c], bms_heat((v - lo) / span, 0.55f), 0);
+            snprintf(b, sizeof b, "%.3f", v); lv_label_set_text(s_bms_celllbl[m][c], b);
+        }
+    }
+}
+#endif // BMS_HTTP
 
 extern "C" void dashboard_ui_set_screen(dash_screen_t screen)
 {

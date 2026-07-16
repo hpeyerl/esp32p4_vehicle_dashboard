@@ -35,8 +35,11 @@ set(REPO ${CMAKE_CURRENT_SOURCE_DIR}/..)
 add_executable(dashboard
   src/main_linux.cpp
   src/stubs.cpp
+  src/bms_http.c
   ${REPO}/src/dashboard_ui.cpp
   ${REPO}/src/can_parser.cpp
+  ${REPO}/src/bms_data.c
+  ${REPO}/include/cJSON.c
   ${REPO}/src/lv_font_montserrat_72.c
   ${REPO}/src/lv_font_montserrat_110.c
 )
@@ -44,7 +47,7 @@ add_executable(dashboard
 # DISPLAY_TARGET=2 -> Waveshare 1920x720 layout; SIM_DATA drives the demo.
 # LCD_*_RES are the landscape UI dimensions (ESP sets these via platformio flags).
 target_compile_definitions(dashboard PRIVATE
-    DISPLAY_TARGET=2 SIM_DATA=1 LCD_H_RES=1920 LCD_V_RES=720)
+    DISPLAY_TARGET=2 SIM_DATA=1 LCD_H_RES=1920 LCD_V_RES=720 BMS_HTTP=1)
 
 # Include order matters: compat shims first (shadow esp_timer.h / wifi_manager.h /
 # display_driver.h), then our linux dir (lv_conf.h) before the ESP src/ copy.
