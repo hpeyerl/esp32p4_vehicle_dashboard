@@ -1,0 +1,51 @@
+# ============================================================
+#  ZombieVerter  ->  EV Dashboard   CAN Tx mapping
+#
+#  Apply: paste the `can` / `save` lines below into the
+#  ZombieVerter web-interface terminal (or serial console).
+#  It prints "CANMAP stored" after `save`.
+#
+#  The '#' comment lines are for humans — the terminal will
+#  print "Unknown command" on them (harmless); strip them if
+#  you prefer a clean paste.
+#
+#  Syntax:  can t <param> <canid> <startbit> <length_bits> <gain>
+#  NOTE: the CAN-ID field is DECIMAL.
+#        1296 = 0x510    1297 = 0x511    1298 = 0x512
+#        (chosen clear of the busy 0x080-0x1FF inverter range)
+#
+#  Dashboard decodes little-endian; signed params (speed, dir,
+#  power, idc, potnom) are sign-extended on the dashboard side.
+#  Match: include/can_signals.h  CAN_ID_VCU1/VCU2/CAN_ID_CRUISE
+# ============================================================
+
+# -- remove the old placements (were on 0x1FE/0x1FF = dec 510/511) --
+can d speed
+can d dir
+can d opmode
+can d power
+can d udc
+can d idc
+can d uaux
+can d potnom
+can d Gear
+
+# -- 0x510 (1296): core --
+can t speed  1296 0  16 1
+can t dir    1296 16 8  1
+can t opmode 1296 24 8  1
+can t power  1296 32 16 10
+can t udc    1296 48 16 10
+
+# -- 0x511 (1297): aux + brake --
+can t idc       1297 0  16 10
+can t uaux      1297 16 16 100
+can t potnom    1297 32 16 10
+can t Gear      1297 48 8  1
+can t din_brake 1297 56 8  1
+
+# -- 0x512 (1298): cruise --
+can t cruisespeed 1298 0  16 1
+can t cruisestt   1298 16 8  1
+
+save

@@ -139,6 +139,7 @@ void parse_can_frame(uint32_t id, const uint8_t *data, uint32_t now_ms)
         g_dash.aux_volts  = (uint16_t)extract_le(data, 16, 16) / 100.0f; // uaux 12V
         g_dash.vcu_potnom = (int16_t) extract_le(data, 32, 16) / 10.0f;  // signed
         g_dash.vcu_range  = (int8_t)  extract_le(data, 48,  8);          // 0=Lo 1=Hi
+        g_dash.vcu_brake  = (uint8_t) extract_le(data, 56,  8);          // din_brake
         g_dash.last_ms_0x511 = now_ms;
         break;
     }
@@ -148,12 +149,10 @@ void parse_can_frame(uint32_t id, const uint8_t *data, uint32_t now_ms)
     //     g_dash.dir_confirmed = (int8_t)can_signal(data, ...);
     //     break;
 
-    case CAN_ID_CRUISE:                             // 0xDEAD — TODO: assign
-        // TODO: define signal layout once oic CAN IDs are known
-        // cruisestt  = bitmask byte, signal layout TBD
-        // cruisespeed = RPM value, signal layout TBD
-        // g_dash.cruise_state = (uint8_t)can_signal(data, ...);
-        // g_dash.cruise_kph   = can_signal(data, ...) * CRUISE_RPM_TO_KPH;
+    case CAN_ID_CRUISE:                             // 0x512 cruise (VCU3)
+        // cruisespeed (motor rpm) -> kph; cruisestt = CC_* state bitmask
+        g_dash.cruise_kph   = (uint16_t)extract_le(data, 0, 16) * CRUISE_RPM_TO_KPH;
+        g_dash.cruise_state = (uint8_t) extract_le(data, 16, 8);
         g_dash.last_ms_cruise = now_ms;
         break;
 
