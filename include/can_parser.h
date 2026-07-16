@@ -41,6 +41,17 @@ typedef struct {
     int8_t  hl_mode;       // hi/lo range   0=L 1=H 2=A 3=HL   (0x300 data[0])
     int8_t  mg_mode;       // motor config  0=MG1+2 1=MG1 2=MG2 3=Blend (0x301 data[0])
 
+    // ZombieVerter VCU frames 0x510/0x511
+    int16_t vcu_rpm;       // motor (MG2) RPM (2016)
+    int8_t  vcu_dir;       // DIRS: -1=R 0=N 1=D 2=P; INT8_MIN=unknown (2024)
+    uint8_t vcu_opmode;    // OPMODES: 0=Off 1=Run 2=Precharge 3=PchFail 4=Charge 5=Preheat
+    float   vcu_udc;       // DC bus voltage, V (2006)
+    float   vcu_idc;       // DC bus current, A (2012)
+    float   vcu_potnom;    // throttle demand, % (2023)
+    int8_t  vcu_range;     // Lexus Gear hi/lo (param 27): 0=Low 1=High; -1=unknown
+    uint32_t last_ms_0x510;
+    uint32_t last_ms_0x511;
+
     // Cruise control
     uint8_t cruise_state;  // CRUISE_CC_* bitmask from cruisestt
     float   cruise_kph;    // target speed in kph (converted from cruisespeed RPM)

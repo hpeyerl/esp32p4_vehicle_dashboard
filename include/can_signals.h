@@ -21,6 +21,18 @@
 #define CAN_ID_RANGE            0x300   // M5Dial: hi/lo range  L/H/A/HL  (data[0])
 #define CAN_ID_MOTOR            0x301   // M5Dial: motor config MG1+2/MG1/MG2/Blend (data[0])
 
+// ZombieVerter dedicated dashboard frames (openinverter CAN Tx, little-endian).
+// NOTE: the Zombie CAN-ID field is DECIMAL — "510"/"511" entered there become
+// 0x1FE/0x1FF, which is what's actually on the bus.
+//  0x1FE: speed@0/16/g1(s) dir@16/8/g1(s) opmode@24/8/g1 power@32/16/g10(s) udc@48/16/g10
+//  0x1FF: idc@0/16/g10(s) uaux@16/16/g100 potnom@32/16/g10(s) Gear@48/8/g1
+#define CAN_ID_VCU1             0x1FE
+#define CAN_ID_VCU2             0x1FF
+
+// Motor(MG2) RPM -> MPH. GS450H high range, total motor->wheel ratio ~10
+// (MG2 reduction ~2.478 x 4.10 diff), 29in tire. PLACEHOLDER — CALIBRATE vs GPS.
+#define VCU_RPM_TO_MPH          0.0085f
+
 // Cruise control — Zombieverter cruisespeed + cruisestt
 // CAN IDs TBD — add via oic and update these
 #define CAN_ID_CRUISE           0xDEAD  // TODO: assign via oic

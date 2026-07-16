@@ -7,7 +7,9 @@
 #include <string.h>
 
 // Global dashboard data instance
-DashData g_dash = { .hl_mode = -1, .mg_mode = -1, .dir_confirmed = INT8_MIN };
+DashData g_dash = { .hl_mode = -1, .mg_mode = -1,
+                    .vcu_dir = INT8_MIN, .vcu_range = -1,
+                    .dir_confirmed = INT8_MIN };
 
 // ── Intel (LE) signal extraction ──────────────────────────────────────────
 static uint64_t extract_le(const uint8_t *data, uint8_t start_bit, uint8_t len)
@@ -119,6 +121,27 @@ void parse_can_frame(uint32_t id, const uint8_t *data, uint32_t now_ms)
     case CAN_ID_MOTOR:                             // 0x301 M5Dial motor config
         g_dash.mg_mode = (int8_t)(data[0] & 0x03);
         break;
+
+    case CAN_ID_VCU1: {                            // 0x510 ZombieVerter core
+        g_dash.vcu_rpm    = (int16_t) extract_le(data,  0, 16);          // signed
+        g_dash.vcu_dir    = (int8_t)  extract_le(data, 16,  8);          // DIRS
+        g_dash.vcu_opmode = (uint8_t) extract_le(data, 24,  8);
+        g_dash.power_kw   = (int16_t) extract_le(data, 32, 16) / 10.0f;  // real kW
+        g_dash.vcu_udc    = (uint16_t)extract_le(data, 48, 16) / 10.0f;
+        int rpm = g_dash.vcu_rpm < 0 ? -g_dash.vcu_rpm : g_dash.vcu_rpm;
+        g_dash.speed      = rpm * VCU_RPM_TO_MPH;                        // coarse
+        g_dash.last_ms_0x510 = now_ms;
+        break;
+    }
+
+    case CAN_ID_VCU2: {                            // 0x511 ZombieVerter aux
+        g_dash.vcu_idc    = (int16_t) extract_le(data,  0, 16) / 10.0f;  // signed
+        g_dash.aux_volts  = (uint16_t)extract_le(data, 16, 16) / 100.0f; // uaux 12V
+        g_dash.vcu_potnom = (int16_t) extract_le(data, 32, 16) / 10.0f;  // signed
+        g_dash.vcu_range  = (int8_t)  extract_le(data, 48,  8);          // 0=Lo 1=Hi
+        g_dash.last_ms_0x511 = now_ms;
+        break;
+    }
 
     // TODO: add case for Zombieverter dir signal (CAN ID TBD via oic)
     // case CAN_ID_DIR:

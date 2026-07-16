@@ -814,7 +814,20 @@ void dashboard_ui_update(const DashData *d)
     static uint32_t gear_ms    = 0;
     int g = (d->gear >= 0 && d->gear < 4) ? d->gear : 0;
     if (g != gear_prev) { gear_prev = g; gear_ms = now_ms; }
-    int boxed = ((uint32_t)(now_ms - gear_ms) >= GEAR_ACK_MS) ? g : -1;
+    // Prefer the Zombie's confirmed direction (dir, DIRS: -1=R 0=N 1=D 2=P) for
+    // a REAL ack; fall back to the M5Dial-style optimistic timer if 0x510 isn't
+    // being received.
+    int conf;
+    switch (d->vcu_dir) {
+        case  2: conf = 0; break;   // Park    -> P
+        case -1: conf = 1; break;   // Reverse -> R
+        case  0: conf = 2; break;   // Neutral -> N
+        case  1: conf = 3; break;   // Drive   -> D
+        default: conf = -1; break;  // unknown
+    }
+    bool dir_known = (d->vcu_dir >= -1 && d->vcu_dir <= 2);
+    int boxed = dir_known ? conf
+              : (((uint32_t)(now_ms - gear_ms) >= GEAR_ACK_MS) ? g : -1);
     if (g != last_gear || boxed != last_boxed) {
         for (int i = 0; i < 4; i++) {
             lv_obj_set_style_text_color(s_lbl_prnd[i],
