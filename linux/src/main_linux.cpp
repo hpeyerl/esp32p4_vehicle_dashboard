@@ -145,12 +145,18 @@ int main(int argc, char **argv)
     // g_dash is defined + initialized in can_parser.cpp (dir_confirmed=INT8_MIN);
     // do NOT memset it here. In CAN mode parse_can_frame() fills it from frames.
     float t = 0.0f;
+    uint64_t canload_bits = 0;               // CAN bus-load accumulator
+    uint32_t canload_t0   = millis_cb();
     for (;;) {
         if (use_can) {
             // drain all pending frames -> the shared parser updates g_dash
             struct can_frame fr;
-            while (read(can_fd, &fr, sizeof fr) == (ssize_t)sizeof fr)
+            while (read(can_fd, &fr, sizeof fr) == (ssize_t)sizeof fr) {
                 parse_can_frame(fr.can_id & CAN_EFF_MASK, fr.data, millis_cb());
+                // bus-load tally: overhead + data bits, +~15% avg bit-stuffing
+                int ov = (fr.can_id & CAN_EFF_FLAG) ? 67 : 47;
+                canload_bits += (uint64_t)((ov + 8 * fr.can_dlc) * 1.15f);
+            }
         } else {
             t += 0.05f;
             g_dash.soc_pct         = 50.0f + 45.0f * sinf(t * 0.3f);
@@ -166,6 +172,16 @@ int main(int argc, char **argv)
             g_dash.gear            = 3;
             g_dash.odo_total_miles = 12345.0f;
             g_dash.trip_miles      = 42.0f;
+        }
+
+        // CAN bus load %, refreshed ~1 Hz (500 kbps bus)
+        uint32_t cl_now = millis_cb();
+        if (cl_now - canload_t0 >= 1000) {
+            float secs = (cl_now - canload_t0) / 1000.0f;
+            float load = (float)canload_bits / (500000.0f * secs) * 100.0f;
+            g_dash.can_load_pct = load > 100.0f ? 100.0f : load;
+            canload_bits = 0;
+            canload_t0   = cl_now;
         }
 
         // let a touched gear button override immediately (UI feedback)

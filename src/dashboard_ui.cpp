@@ -1054,10 +1054,10 @@ static void prv_ensure_settings_screen(void)
 
 // ── Status screen: clean live-values grid, fed from g_dash (CAN) ─────────
 enum { ST_SOC, ST_SPEED, ST_POWER, ST_PACKV, ST_PACKA, ST_RANGE,
-       ST_MOTOR, ST_INV, ST_BATT, ST_AUX, ST_GEAR, ST_ODO, ST_TRIP, ST_N };
+       ST_MOTOR, ST_INV, ST_BATT, ST_AUX, ST_GEAR, ST_ODO, ST_TRIP, ST_CANLOAD, ST_N };
 static const char *st_name[ST_N] = {
     "SOC", "SPEED", "POWER", "PACK V", "PACK A", "RANGE",
-    "MOTOR", "INVERTER", "BATTERY", "AUX 12V", "GEAR", "ODO", "TRIP" };
+    "MOTOR", "INVERTER", "BATTERY", "AUX 12V", "GEAR", "ODO", "TRIP", "CAN LOAD" };
 static lv_obj_t *s_st_val[ST_N];
 
 static void prv_ensure_status_screen(void)
@@ -1123,6 +1123,7 @@ static void prv_update_status(const DashData *d)
     lv_label_set_text(s_st_val[ST_GEAR], d->gear < 4 ? gnm[d->gear] : "-");
     snprintf(b, sizeof b, "%.0f",    d->odo_total_miles); lv_label_set_text(s_st_val[ST_ODO],   b);
     snprintf(b, sizeof b, "%.1f",    d->trip_miles);      lv_label_set_text(s_st_val[ST_TRIP],  b);
+    snprintf(b, sizeof b, "%.0f %%", d->can_load_pct);    lv_label_set_text(s_st_val[ST_CANLOAD], b);
 }
 
 #ifdef BMS_HTTP
