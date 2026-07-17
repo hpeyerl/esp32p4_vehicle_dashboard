@@ -50,6 +50,11 @@ LV_FONT_DECLARE(lv_font_montserrat_110)
 #define CLR_WHITE       lv_color_hex(0xFFFFFF)
 #define CLR_ORANGE      lv_color_hex(0xF59E0B)
 
+// Sub-screen "safe area": keep content clear of the top-left HOME button and
+// the far-right ◀▶ arrow strip so the nav controls never occlude content.
+#define NAV_SAFE_TOP    84
+#define NAV_SAFE_RIGHT  124
+
 // ── Layout — see dashboard_layout.h (selected by DISPLAY_TARGET) ─────────
 // Layout constants (LEFT_W, RIGHT_W, BOT_H, ARC_R, METER_R etc.)
 // are defined in layout_waveshare.h / layout_tab5.h / layout_stub.h
@@ -828,7 +833,8 @@ void dashboard_ui_update(const DashData *d)
         default: conf = -1; break;  // unknown
     }
     bool dir_known = (d->vcu_dir >= -1 && d->vcu_dir <= 2);
-    int boxed = dir_known ? conf
+    int boxed = d->vcu_park ? 0                 // P: pawl engaged (lever contact)
+              : dir_known   ? conf              // R/N/D from Zombie dir
               : (((uint32_t)(now_ms - gear_ms) >= GEAR_ACK_MS) ? g : -1);
     if (g != last_gear || boxed != last_boxed) {
         for (int i = 0; i < 4; i++) {
@@ -1063,8 +1069,8 @@ static void prv_ensure_status_screen(void)
     lv_obj_clear_flag(s_scr_status, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *grid = lv_obj_create(s_scr_status);
-    lv_obj_set_size(grid, LCD_H_RES - 40, LCD_V_RES - 96);
-    lv_obj_align(grid, LV_ALIGN_BOTTOM_MID, 0, -12);
+    lv_obj_set_size(grid, LCD_H_RES - 12 - NAV_SAFE_RIGHT, LCD_V_RES - NAV_SAFE_TOP - 12);
+    lv_obj_align(grid, LV_ALIGN_TOP_LEFT, 12, NAV_SAFE_TOP);
     lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(grid, 0, 0);
     lv_obj_set_style_pad_all(grid, 0, 0);
@@ -1073,7 +1079,7 @@ static void prv_ensure_status_screen(void)
     lv_obj_set_flex_flow(grid, LV_FLEX_FLOW_ROW_WRAP);
     lv_obj_clear_flag(grid, LV_OBJ_FLAG_SCROLLABLE);
 
-    const lv_coord_t card_w = (LCD_H_RES - 40 - 4 * 12) / 5;   // 5 cards per row
+    const lv_coord_t card_w = (LCD_H_RES - 12 - NAV_SAFE_RIGHT - 4 * 12) / 5;  // 5/row
     for (int i = 0; i < ST_N; i++) {
         lv_obj_t *card = lv_obj_create(grid);
         lv_obj_set_size(card, card_w, 118);
@@ -1161,8 +1167,8 @@ static void prv_ensure_bms_screen(void)
 
     // ── summary strip ──
     lv_obj_t *sum = lv_obj_create(s_scr_bms);
-    lv_obj_set_size(sum, W - 24, 92);
-    lv_obj_align(sum, LV_ALIGN_TOP_MID, 0, 10);
+    lv_obj_set_size(sum, W - 196 - 12, 92);          // start right of the HOME button
+    lv_obj_align(sum, LV_ALIGN_TOP_RIGHT, -12, 10);
     lv_obj_set_style_bg_opa(sum, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(sum, 0, 0);
     lv_obj_set_style_pad_all(sum, 0, 0);
@@ -1194,8 +1200,8 @@ static void prv_ensure_bms_screen(void)
 
     // ── module cards ──
     lv_obj_t *mods = lv_obj_create(s_scr_bms);
-    lv_obj_set_size(mods, W - 24, H - BOT_H - 92 - 34);
-    lv_obj_align(mods, LV_ALIGN_TOP_MID, 0, 110);
+    lv_obj_set_size(mods, W - 12 - NAV_SAFE_RIGHT, H - BOT_H - 92 - 34);  // clear arrows
+    lv_obj_align(mods, LV_ALIGN_TOP_LEFT, 12, 110);
     lv_obj_set_style_bg_opa(mods, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(mods, 0, 0);
     lv_obj_set_style_pad_all(mods, 0, 0);

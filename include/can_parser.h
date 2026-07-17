@@ -50,6 +50,7 @@ typedef struct {
     float   vcu_potnom;    // throttle demand, % (2023)
     int8_t  vcu_range;     // Lexus Gear hi/lo (param 27): 0=Low 1=High; -1=unknown
     uint8_t vcu_brake;     // din_brake (2037): 1=brake pressed (0x511 byte7)
+    uint8_t vcu_park;      // din_12Vgp (2071): 1=park pawl engaged (0x512 byte3)
     uint32_t last_ms_0x510;
     uint32_t last_ms_0x511;
 

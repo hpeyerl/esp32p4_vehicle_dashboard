@@ -153,6 +153,7 @@ void parse_can_frame(uint32_t id, const uint8_t *data, uint32_t now_ms)
         // cruisespeed (motor rpm) -> kph; cruisestt = CC_* state bitmask
         g_dash.cruise_kph   = (uint16_t)extract_le(data, 0, 16) * CRUISE_RPM_TO_KPH;
         g_dash.cruise_state = (uint8_t) extract_le(data, 16, 8);
+        g_dash.vcu_park     = (uint8_t) extract_le(data, 24, 8);          // din_12Vgp
         g_dash.last_ms_cruise = now_ms;
         break;
 

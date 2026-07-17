@@ -26,7 +26,7 @@
 // CAN-ID field is DECIMAL: 1296=0x510, 1297=0x511, 1298=0x512.
 //  0x510: speed@0/16(s) dir@16/8(s) opmode@24/8 power@32/16/g10(s) udc@48/16/g10
 //  0x511: idc@0/16/g10(s) uaux@16/16/g100 potnom@32/16/g10(s) Gear@48/8 din_brake@56/8
-//  0x512: cruisespeed@0/16 cruisestt@16/8  (see CAN_ID_CRUISE)
+//  0x512: cruisespeed@0/16 cruisestt@16/8 din_12Vgp@24/8(park) (see CAN_ID_CRUISE)
 #define CAN_ID_VCU1             0x510
 #define CAN_ID_VCU2             0x511
 

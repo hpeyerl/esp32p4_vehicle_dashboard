@@ -44,8 +44,10 @@ can t potnom    1297 32 16 10
 can t Gear      1297 48 8  1
 can t din_brake 1297 56 8  1
 
-# -- 0x512 (1298): cruise --
+# -- 0x512 (1298): cruise + park --
 can t cruisespeed 1298 0  16 1
 can t cruisestt   1298 16 8  1
+# park pawl sense: wire the transmission P-position contact to din_12Vgp
+can t din_12Vgp   1298 24 8  1
 
 save
