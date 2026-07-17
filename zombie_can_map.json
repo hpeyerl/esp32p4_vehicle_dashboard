@@ -1,0 +1,37 @@
+{
+    "version": 2,
+    "tx": [
+        {
+            "can_id": 1296,
+            "params": [
+                {"param": "speed",  "position": 0,  "length": 16, "gain": 1.0,  "offset": 0},
+                {"param": "dir",    "position": 16, "length": 8,  "gain": 1.0,  "offset": 0},
+                {"param": "opmode", "position": 24, "length": 8,  "gain": 1.0,  "offset": 0},
+                {"param": "power",  "position": 32, "length": 16, "gain": 10.0, "offset": 0},
+                {"param": "udc",    "position": 48, "length": 16, "gain": 10.0, "offset": 0}
+            ],
+            "is_extended_frame": false
+        },
+        {
+            "can_id": 1297,
+            "params": [
+                {"param": "idc",       "position": 0,  "length": 16, "gain": 10.0,  "offset": 0},
+                {"param": "uaux",      "position": 16, "length": 16, "gain": 100.0, "offset": 0},
+                {"param": "potnom",    "position": 32, "length": 16, "gain": 10.0,  "offset": 0},
+                {"param": "Gear",      "position": 48, "length": 8,  "gain": 1.0,   "offset": 0},
+                {"param": "din_brake", "position": 56, "length": 8,  "gain": 1.0,   "offset": 0}
+            ],
+            "is_extended_frame": false
+        },
+        {
+            "can_id": 1298,
+            "params": [
+                {"param": "cruisespeed", "position": 0,  "length": 16, "gain": 1.0, "offset": 0},
+                {"param": "cruisestt",   "position": 16, "length": 8,  "gain": 1.0, "offset": 0},
+                {"param": "din_12Vgp",   "position": 24, "length": 8,  "gain": 1.0, "offset": 0}
+            ],
+            "is_extended_frame": false
+        }
+    ],
+    "rx": []
+}
