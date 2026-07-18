@@ -36,6 +36,7 @@ add_executable(dashboard
   src/main_linux.cpp
   src/stubs.cpp
   src/bms_http.c
+  src/http_api.c
   ${REPO}/src/dashboard_ui.cpp
   ${REPO}/src/can_parser.cpp
   ${REPO}/src/bms_data.c
@@ -58,4 +59,5 @@ target_include_directories(dashboard PRIVATE
   ${REPO}/src
 )
 
-target_link_libraries(dashboard PRIVATE lvgl m ${LIBDRM_LIBRARIES})
+find_package(Threads REQUIRED)
+target_link_libraries(dashboard PRIVATE lvgl m ${LIBDRM_LIBRARIES} Threads::Threads)

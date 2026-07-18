@@ -33,6 +33,7 @@
 #include "can_parser.h"      // DashData
 #include "gear_shifter.h"    // gear_shifter_current()
 #include "bms_http.h"        // bms_http_poll()
+#include "http_api.h"        // http_api_start()
 
 // Auto-detect the touchscreen's evdev node by scanning input device names.
 // Returns a static "/dev/input/eventN" path, or NULL if none found.
@@ -134,6 +135,9 @@ int main(int argc, char **argv)
 
     // --- build the dashboard UI ---
     dashboard_ui_create(disp);
+
+    // --- HTTP control/status API (remote nav + live state) ---
+    http_api_start(8080);
 
     // --- data source: real vehicle CAN (can0) if available, else simulated ---
     const char *can_iface = getenv("CAN_IFACE");
