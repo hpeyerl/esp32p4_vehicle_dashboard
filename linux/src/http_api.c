@@ -17,6 +17,7 @@
 #include <strings.h>
 #include <stdint.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -90,6 +91,93 @@ static void handle_nav(int fd, const char *path)
     }
 }
 
+static int parse_screen_q(const char *path, dash_screen_t *out)
+{
+    const char *q = strstr(path, "screen=");
+    if (!q) return 0;
+    q += 7;
+    if      (!strncasecmp(q, "home",     4)) *out = DASH_SCREEN_HOME;
+    else if (!strncasecmp(q, "settings", 8)) *out = DASH_SCREEN_SETTINGS;
+    else if (!strncasecmp(q, "status",   6)) *out = DASH_SCREEN_STATUS;
+    else if (!strncasecmp(q, "vcu",      3)) *out = DASH_SCREEN_STATUS;
+    else if (!strncasecmp(q, "bms",      3)) *out = DASH_SCREEN_BMS;
+    else return 0;
+    return 1;
+}
+
+// GET /api/screenshot[?screen=NAME] — grab /dev/fb0 (720x1920 BGRX), rotate to
+// 1920x720 landscape, return as a BMP (no deps; browsers render it fine).
+static void handle_screenshot(int fd, const char *path)
+{
+    dash_screen_t scr;
+    if (parse_screen_q(path, &scr)) {
+        dashboard_ui_set_screen(scr);
+        usleep(150 * 1000);              // let the UI thread render the switch
+    }
+
+    const int FBW = 720, FBH = 1920;     // physical framebuffer (portrait)
+    size_t fbsz = (size_t)FBW * FBH * 4;
+    unsigned char *fb = (unsigned char *)malloc(fbsz);
+    if (!fb) { send_resp(fd, "500 Internal Server Error", "text/plain", "oom"); return; }
+    int f = open("/dev/fb0", O_RDONLY);
+    ssize_t rd = (f >= 0) ? read(f, fb, fbsz) : -1;
+    if (f >= 0) close(f);
+    if (rd != (ssize_t)fbsz) {
+        free(fb);
+        send_resp(fd, "500 Internal Server Error", "text/plain", "fb read failed");
+        return;
+    }
+
+    const int OW = 1920, OH = 720;       // landscape output
+    int rowsz = OW * 3;                  // 5760, already 4-byte aligned
+    size_t pixsz = (size_t)rowsz * OH;
+    size_t filesz = 54 + pixsz;
+    unsigned char *bmp = (unsigned char *)calloc(1, filesz);
+    if (!bmp) { free(fb); send_resp(fd, "500 Internal Server Error", "text/plain", "oom"); return; }
+
+    bmp[0] = 'B'; bmp[1] = 'M';
+    uint32_t v;
+    v = (uint32_t)filesz; memcpy(bmp + 2,  &v, 4);
+    v = 54;               memcpy(bmp + 10, &v, 4);   // pixel data offset
+    v = 40;               memcpy(bmp + 14, &v, 4);   // info header size
+    int32_t iv;
+    iv = OW;  memcpy(bmp + 18, &iv, 4);
+    iv = OH;  memcpy(bmp + 22, &iv, 4);              // positive => bottom-up
+    uint16_t s16;
+    s16 = 1;  memcpy(bmp + 26, &s16, 2);
+    s16 = 24; memcpy(bmp + 28, &s16, 2);            // 24bpp
+    v = (uint32_t)pixsz; memcpy(bmp + 34, &v, 4);
+
+    // 90° CCW map: out(xo,yo) = fb(fx=FBW-1-yo, fy=xo). BMP is bottom-up + BGR;
+    // fb is BGRX so the first 3 bytes copy straight over.
+    for (int r = 0; r < OH; r++) {
+        int yo = OH - 1 - r;                          // bottom-up
+        unsigned char *drow = bmp + 54 + (size_t)r * rowsz;
+        int fx = FBW - 1 - yo;
+        for (int xo = 0; xo < OW; xo++) {
+            const unsigned char *src = fb + ((size_t)xo * FBW + fx) * 4;
+            drow[xo * 3 + 0] = src[0];
+            drow[xo * 3 + 1] = src[1];
+            drow[xo * 3 + 2] = src[2];
+        }
+    }
+    free(fb);
+
+    char hdr[256];
+    int hn = snprintf(hdr, sizeof hdr,
+        "HTTP/1.1 200 OK\r\nContent-Type: image/bmp\r\nContent-Length: %zu\r\n"
+        "Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n", filesz);
+    if (write(fd, hdr, (size_t)hn) > 0) {
+        size_t off = 0;
+        while (off < filesz) {
+            ssize_t w = write(fd, bmp + off, filesz - off);
+            if (w <= 0) break;
+            off += (size_t)w;
+        }
+    }
+    free(bmp);
+}
+
 static void *server_thread(void *arg)
 {
     int port = (int)(intptr_t)arg;
@@ -122,12 +210,14 @@ static void *server_thread(void *arg)
             buf[n] = 0;
             char method[8] = {0}, path[512] = {0};
             sscanf(buf, "%7s %511s", method, path);
-            if      (!strncmp(path, "/api/status", 11)) handle_status(c);
-            else if (!strncmp(path, "/api/nav",     8)) handle_nav(c, path);
+            if      (!strncmp(path, "/api/status",     11)) handle_status(c);
+            else if (!strncmp(path, "/api/screenshot", 15)) handle_screenshot(c, path);
+            else if (!strncmp(path, "/api/nav",         8)) handle_nav(c, path);
             else send_resp(c, "200 OK", "text/plain",
                     "EV Dashboard API\n"
-                    "  GET /api/status           live values (JSON)\n"
-                    "  GET /api/nav?screen=NAME  home|settings|status|vcu|bms\n");
+                    "  GET /api/status                   live values (JSON)\n"
+                    "  GET /api/nav?screen=NAME          home|settings|status|vcu|bms\n"
+                    "  GET /api/screenshot[?screen=NAME] framebuffer as BMP\n");
         }
         close(c);
     }
