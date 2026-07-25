@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=EVJ55
+Description=EVJ55 FJ55 Land Cruiser boot splash (static, pre-rotated for the DSI panel)
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/evj55
+ScriptFile=/usr/share/plymouth/themes/evj55/evj55.script

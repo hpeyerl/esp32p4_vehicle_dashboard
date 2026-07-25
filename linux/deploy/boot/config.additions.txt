@@ -1,0 +1,11 @@
+# Lines added to /boot/firmware/config.txt by install.sh (idempotent).
+# Do NOT remove your existing DSI panel / vc4-kms-v3d overlay lines — these are
+# additive only.
+
+# Suppress the firmware rainbow splash (Plymouth replaces it).
+disable_splash=1
+
+# Build an initramfs automatically so Plymouth's theme is available EARLY in boot
+# (Pi OS shows the splash from the initramfs; without this the truck only appears
+# late). install.sh runs update-initramfs after enabling this.
+auto_initramfs=1

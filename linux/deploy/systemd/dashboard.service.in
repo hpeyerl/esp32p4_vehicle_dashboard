@@ -1,0 +1,25 @@
+[Unit]
+Description=EVJ55 Vehicle Dashboard (LVGL, fbdev)
+Documentation=file://@WORKDIR@/README.md
+# Start after local sessions are set up and, crucially, after Plymouth has
+# released DRM master — otherwise the fbdev app and Plymouth fight over /dev/fb0.
+After=systemd-user-sessions.service plymouth-quit-wait.service
+ConditionPathExists=/dev/fb0
+
+[Service]
+Type=simple
+# @DASHBOARD_BIN@ and @WORKDIR@ are substituted by install.sh at install time.
+ExecStart=@DASHBOARD_BIN@ /dev/fb0
+WorkingDirectory=@WORKDIR@
+# fbdev + evdev need device access; simplest on a single-purpose appliance is root.
+# To de-privilege: create a user in the 'video' and 'input' groups and set it here.
+User=root
+# The app defaults to 270 already; make it explicit so the unit is self-documenting.
+Environment=LV_ROTATE=270
+Restart=always
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

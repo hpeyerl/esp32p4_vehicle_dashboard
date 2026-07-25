@@ -1,0 +1,13 @@
+# Flags appended to the SINGLE line in /boot/firmware/cmdline.txt by install.sh.
+# (cmdline.txt is one line — these are space-separated tokens, NOT newlines.)
+#
+#   quiet                          suppress most kernel boot messages
+#   splash                         enable the Plymouth splash
+#   plymouth.ignore-serial-consoles keep the splash off serial consoles
+#   logo.nologo                    hide the raspberry logos
+#   vt.global_cursor_default=0     no blinking cursor behind the splash
+#   consoleblank=0                 DISABLE console framebuffer blanking
+#                                  (this is the "screen went dark" fix)
+#   loglevel=3                     only warnings+ to the console
+#
+quiet splash plymouth.ignore-serial-consoles logo.nologo vt.global_cursor_default=0 consoleblank=0 loglevel=3

@@ -1,0 +1,27 @@
+# EVJ55 boot splash — static, pre-rotated truck on a dark field.
+#
+# The splash PNG (evj55_splash.png) is already 720x1920 and pre-rotated 270 deg
+# to match the dashboard app, so we just center it on the raw framebuffer. If the
+# framebuffer geometry ever differs from the asset, it is centered (and cropped/
+# letterboxed) rather than distorted — the dark background fills any gap.
+
+# Dark neutral background (#18191c) behind the image.
+Window.SetBackgroundTopColor(0.094, 0.098, 0.110);
+Window.SetBackgroundBottomColor(0.094, 0.098, 0.110);
+
+splash    = Image("evj55_splash.png");
+splash_s  = Sprite(splash);
+splash_s.SetX((Window.GetWidth()  - splash.GetWidth())  / 2);
+splash_s.SetY((Window.GetHeight() - splash.GetHeight()) / 2);
+splash_s.SetZ(-100);
+
+# Static splash — no animation. Provide no-op callbacks so plymouth is happy.
+fun refresh_callback () { }
+Plymouth.SetRefreshFunction(refresh_callback);
+
+fun boot_progress_callback (duration, progress) { }
+Plymouth.SetBootProgressFunction(boot_progress_callback);
+
+# Appliance unit: never expect a password prompt on the panel.
+fun display_normal_callback () { }
+Plymouth.SetDisplayNormalFunction(display_normal_callback);
