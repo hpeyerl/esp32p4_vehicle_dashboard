@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Herb Peyerl
+// SPDX-License-Identifier: BSD-3-Clause
+
 // =============================================================
 //  display_driver.h — Linux shim
 //

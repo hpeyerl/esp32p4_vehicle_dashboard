@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Herb Peyerl
+// SPDX-License-Identifier: BSD-3-Clause
+
 // =============================================================
 //  main_linux.c — EV Dashboard, Linux/Pi5 prototype entry point
 //

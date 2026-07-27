@@ -1,175 +1,90 @@
-# EV Dashboard — ESP32-P4 Nano
+# EVJ55 Dashboard
 
-LVGL dashboard for an electric vehicle conversion.
-CAN messages are configured for a ZombieVerter VCU (JLR G1 drivetrain).
+An LVGL instrument cluster for an EV conversion — In this case, a 1976 Toyota FJ55
+Land Cruiser ("EVJ55") running a Lexus **LS600HL** transmission, a
+**ZombieVerter / openinverter** VCU, and **BMW i3** battery. It renders speed,
+power, state-of-charge, temperatures, gear (PRND) and battery/BMS detail on a
+Waveshare 12.3" DSI touch panel, driven live from the vehicle CAN bus.
 
-## Hardware
+> This is a personal project for one specific vehicle, shared as-is. Fork-friendly; **not**
+> maintained as a general-purpose product. If it's useful to you, take it and run applying all due credit etc.
+> 
+> This code was substantially developed by Claude Code since I have retired from my long embedded firmware career.  There was extensive pulling of Claude's leash and supervision from my embedded firmware perspective.   I also wanted to learn more about this AI thing and this was a good non-mission-critical app to do that with.
 
-| Component | Part |
-|---|---|
-| MCU board | Waveshare ESP32-P4-Nano |
-| Display | Waveshare 12.3" DSI Touch (12.3-DSI-TOUCH-A) — 1920×720 |
-| Display controller | Himax HX8399-C, 2-lane MIPI-DSI |
-| WiFi | ESP32-C6 coprocessor (on-board, SDIO via ESP-Hosted) |
-| CAN transceiver | SN65HVD230 (TWAI, GPIO53 TX / GPIO48 RX) |
-| Flash | GD25Q128, 16MB |
-| PSRAM | 32MB HEX |
+## Screenshots
 
-## Pin Assignments
 
-| Signal | GPIO | Notes |
-|---|---|---|
-| TWAI TX | 53 | SN65HVD230 |
-| TWAI RX | 48 | SN65HVD230 |
-| VSS pulse | 5 | Reed switch to GND, internal pullup |
-| SDIO CLK | 18 | ESP32-P4 → C6 (internal) |
-| SDIO CMD | 19 | ESP32-P4 → C6 (internal) |
-| SDIO D0–D3 | 14–17 | ESP32-P4 → C6 (internal) |
-| C6 Reset | 54 | Via R54 0Ω to C6 CHIP_PU |
+| Home | BMS | VCU |
+|------|-----| ----- |
+| ![home](screenshots/home.png) | ![bms](screenshots/bms.png) | ![vcu](screenshots/vcu.png) |
 
-DSI, touch I2C, backlight, and LCD reset are on the DSI FPC connector — not configurable.
+## Which branch do I want?
 
-## CAN Transceiver Wiring (SN65HVD230)
+This repo carries two lineages of the same dashboard. **Pick your branch by hardware:**
 
-```
-ESP32-P4-Nano GPIO53  →  SN65HVD230 TX
-ESP32-P4-Nano GPIO48  →  SN65HVD230 RX
-ESP32-P4-Nano 3.3V    →  SN65HVD230 VCC
-ESP32-P4-Nano GND     →  SN65HVD230 GND
-SN65HVD230 CANH       →  vehicle CANH
-SN65HVD230 CANL       →  vehicle CANL
-```
+| Branch | Compute | Display | Status |
+|--------|---------|---------|--------|
+| **`main`** (here) | **Linux** — Raspberry Pi 5 → Radxa CM3 (RK3566), fbdev/DRM | Waveshare **12.3" DSI-TOUCH-A** (720×1920 native → 1920×720 landscape, 4-lane) | **Active** |
+| `esp32p4` | **ESP32-P4** (Waveshare ESP32-P4-Nano), ESP-IDF/FreeRTOS | DSI panel — best suited to **2-lane** glass; also ran on the **M5Stack Tab5** | **Frozen** — preserved, not developed |
 
-## VSS Wiring
+The project *started* on the ESP32-P4. The 12.3" panel needs 4 DSI lanes, which
+pushed the live build to a Linux SBC (and, ultimately, a Radxa CM3 chosen for
+suspend-to-RAM instant-on). The ESP32-P4 line is frozen on `esp32p4` for anyone
+targeting a 2-lane DSI display or the Tab5 — it has its own README with the
+board wiring, pin map and OTA flashing. Older feature branches (`tab5`,
+`waveshare`, `gvret`, `esp-idf-5.5-upgrade`) are historical.
 
-Reed switch (two-wire, no polarity):
-```
-One wire   →  GPIO5
-Other wire →  GND
-```
-Internal pullup enabled. Default calibration: 103.67" tire circumference,
-4.10 diff ratio, 4 pulses/rev. Override in `include/vss_sensor.h` or at
-runtime via `http://ev-dashboard.local/settings`.
+## What's on this branch
 
-## First-Time Setup
+- **Native Linux** LVGL 9.x app over **fbdev** (`/dev/fb0`) — no RTOS, no ESP-IDF.
+  fbdev (not DRM) so LVGL can do the software rotation the portrait-mounted panel needs.
+- **Target:** Raspberry Pi 5 today; **Radxa CM3 (RK3566) on a CM4 IO board** as the
+  production compute (paired with a custom vehicle-interface HAT).
+- **Live data:** vehicle CAN via **SocketCAN** (`can0`) — ZombieVerter VCU frames
+  (`zombie_can_map.txt` / `.json`); BMW i3 BMS pulled over HTTP.
+- **HTTP API** on `:8080` — JSON data + PNG screenshot endpoints.
+- Touch via **evdev** (GT911 auto-detected).
 
-### 1. WiFi credentials
+## Build & run (Linux)
 
-Copy `include/wifi_config.h.template` to `include/wifi_config.h` and fill in:
-```c
-#define OTA_STA_SSID     "your_network"
-#define OTA_STA_PASSWORD "your_password"
-```
-If absent, the device falls back to AP mode: SSID `ev-dashboard`, password `dashboard1`.
+```sh
+sudo apt install -y cmake build-essential libdrm-dev pkg-config
+cd linux
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j4
 
-### 2. First flash (USB)
-
-```bash
-pio run -e stub_debug_usb -t upload --upload-port /dev/ttyACM0
+sudo systemctl stop lightdm      # release the panel (dev box only)
+./build/dashboard                # /dev/fb0, auto-detected touch, 270° rotation
+# LV_ROTATE=90 ./build/dashboard # override rotation (0/90/180/270)
 ```
 
-After this, all subsequent flashes can be done over WiFi with `make`.
+More detail — including the appliance boot setup (console boot, systemd service,
+Plymouth splash) — in [`linux/README.md`](linux/README.md) and
+[`linux/deploy/`](linux/deploy/).
 
-### 3. All subsequent flashes (OTA)
+## Architecture
 
-```bash
-make          # build + deploy (curl POST to ev-dashboard.local/update)
-make build    # build only
-make ota      # deploy current binary without rebuilding
-```
+One shared UI, two platform backends — the reason both lineages can coexist:
 
-## Build Environments
+- **Shared UI:** [`src/dashboard_ui.cpp`](src/dashboard_ui.cpp) and the CAN parser
+  (`src/can_parser.cpp`) — identical on both platforms.
+- **Linux backend:** [`linux/`](linux/) — fbdev display, evdev touch, SocketCAN,
+  HTTP API. The ESP-IDF APIs the shared code expects are provided by thin stubs in
+  [`linux/compat/`](linux/compat/) (`esp_err.h`, `esp_timer.h`, …), so the shared
+  tree compiles unmodified.
+- **ESP32-P4 backend:** the ESP-IDF `app_main()` in `src/main.cpp` (`pio run`;
+  see the `esp32p4` branch and its README for wiring/flashing).
 
-| env | Display | Resolution | Flash method |
-|---|---|---|---|
-| `stub_debug` | Software framebuffer | 1920×720 | OTA (`make`) |
-| `stub_debug_usb` | Software framebuffer | 1920×720 | USB |
-| `stub` | Software framebuffer | 1920×720 | OTA |
-| `stub_usb` | Software framebuffer | 1920×720 | USB |
-| `waveshare` | Waveshare 12.3" HX8399-C | 1920×720 | OTA |
-| `waveshare_usb` | Waveshare 12.3" HX8399-C | 1920×720 | USB |
-| `waveshare_debug` | Waveshare 12.3" HX8399-C | 1920×720 | OTA |
-| `tab5` | M5Stack Tab5 ST7123 | 1280×720 | OTA |
-| `tab5_usb` | M5Stack Tab5 ST7123 | 1280×720 | USB |
+## Related
 
-The stub environments run without any display hardware. LVGL renders to a
-software framebuffer; the MJPEG stream lets you see the UI in a browser.
+Part of the broader EVJ55 conversion — a ZombieVerter VCU, a BMW i3 CSC BMS, and
+an M5Dial JLR shifter, each in their own repos. The Radxa CM3 vehicle-interface
+HAT (power supervision, CAN, EPB, MagneRide, ignition-sense) is designed separately.
 
-## Web Interface
+## License
 
-The device announces itself as `ev-dashboard.local` via mDNS.
+[BSD-3-Clause](LICENSE) — Copyright © 2026 Herb Peyerl.
 
-| URL | Description |
-|---|---|
-| `http://ev-dashboard.local/` | Redirects to `/view` |
-| `http://ev-dashboard.local/view` | Live MJPEG stream + navigation bar |
-| `http://ev-dashboard.local/ota` | OTA firmware drag-and-drop |
-| `http://ev-dashboard.local/settings` | ZombieVerter parameter editor (SDO) |
-| `http://ev-dashboard.local/status-page` | Live spot values (auto-refresh) |
-| `http://ev-dashboard.local/status` | JSON: firmware version, partition, IP |
-| `http://ev-dashboard.local/api/status` | JSON spot values |
-| `http://ev-dashboard.local/api/params` | JSON param list (triggers SDO fetch) |
-| `http://ev-dashboard.local/api/param` | POST: write a ZombieVerter parameter |
-| `http://ev-dashboard.local/api/save` | POST: save params to VCU flash |
-| `http://ev-dashboard.local/nav?screen=X` | Switch LVGL screen (home/settings/status) |
-| `http://ev-dashboard.local:81/stream` | Raw MJPEG stream (dedicated server) |
-
-## MJPEG Stream
-
-The display framebuffer is exposed as an MJPEG stream on port 81, running on
-a dedicated HTTP server so OTA and navigation stay responsive during streaming.
-Open `http://ev-dashboard.local/view` for the framed view with navigation
-buttons, or connect directly to `:81/stream` for the raw feed.
-
-## Dashboard Layout
-
-```
-┌──────────────┬──┬──────────────────────┬──┬────────────┐
-│ 5× half-arc  │  │                      │  │ Efficiency │
-│ meter gauges │S │    157  km/h         │P │ Trip kWh  │
-│ inv/mot/bat  │O │    D  P R N D        │W │ Range     │
-│ pack V / A   │C │                      │R │ 12V aux   │
-├──────────────┴──┴──────────────────────┴──┴────────────┤
-│  [Home]  [Settings]  [Status]              CAN  WiFi   │
-└──────────────────────────────────────────────────────────┘
-```
-
-- **SOC arc** — `(` shape left of speed; cyan ≥50% / amber 21–49% / red ≤20%
-- **Power arc** — `)` shape right of speed; orange = drive, green = regen
-- **PRND labels** — tappable on touchscreen, sends CAN 0x312 at 20 ms
-- **CAN / WiFi dots** — red/green status indicators at bottom of right panel
-- **Left panel** — 5 half-circle meter gauges (inverter temp, motor temp, battery temp, pack volts, pack amps)
-- **Navigation bar** — Home / Settings / Status; switchable from browser or touch
-
-## CAN Signals (ZombieVerter)
-
-| CAN ID | Signal |
-|---|---|
-| 0x125 | Motor temperature |
-| 0x126 | Inverter temperature |
-| 0x210 | 12V aux battery voltage |
-| 0x257 | Vehicle speed |
-| 0x312 | PRND gear (byte[3] upper nibble: 0=P 1=R 2=N 3=D) |
-| 0x355 | State of charge |
-| 0x356 | Pack voltage, pack amps, battery temperature |
-
-SDO: node 3, TX 0x603 / RX 0x583. Parameters are ×32 fixed-point at index
-`0x2100 | (paramId >> 8)`, subindex `paramId & 0xFF`.
-
-## OTA Rollback
-
-New firmware has 30 seconds to call `ota_server_mark_valid()`. If it crashes
-before that, the bootloader rolls back to the previous image on next boot.
-
-## Serial Monitor
-
-```bash
-pio device monitor -e stub_debug --port /dev/ttyACM0
-```
-
-## esptool Reset (if needed)
-
-```bash
-~/.platformio/packages/tool-esptoolpy/esptool.py \
-  --chip esp32p4 --port /dev/ttyACM0 --baud 115200 run
-```
+Permissive: use it, fork it, ship it — keep the copyright and license notice, and
+don't use the author's name to promote derived products. Provided **as-is, with no
+warranty** — it's a hobby dashboard for a moving vehicle; run it at your own risk.

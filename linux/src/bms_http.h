@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Herb Peyerl
+// SPDX-License-Identifier: BSD-3-Clause
+
 // =============================================================
 //  bms_http.h — poll the BMW i3 BMS web API (Linux only)
 // =============================================================

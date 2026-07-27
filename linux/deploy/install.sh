@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Herb Peyerl
+# SPDX-License-Identifier: BSD-3-Clause
 #
 # install.sh — convert a Raspberry Pi OS (Bookworm) Pi 5 into an EVJ55 dashboard
 #              appliance: console boot (no desktop), Plymouth truck splash, the

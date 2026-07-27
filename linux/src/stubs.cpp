@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Herb Peyerl
+// SPDX-License-Identifier: BSD-3-Clause
+
 // =============================================================
 //  stubs.cpp — Linux implementations of the few external symbols
 //  the portable dashboard UI references.

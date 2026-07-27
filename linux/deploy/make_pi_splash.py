@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Herb Peyerl
+# SPDX-License-Identifier: BSD-3-Clause
 """
 make_pi_splash.py — render the FJ55 boot splash for the Pi 5 / Waveshare DSI panel.
 
