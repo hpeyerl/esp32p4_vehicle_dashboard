@@ -11,6 +11,16 @@
  * rotated 270 in software (fbdev) as on the Pi — see linux/cm3/README.md.
  *
  * Build (Radxa overlay flow, cpp + dtc): the .dtsi is pulled in with /include/.
+ *
+ * SKELETON SOURCE: Radxa's shipped `rock-3b-radxa-8inch-dsi1-display.dtbo` is a
+ * rk356x (== RK3566) `simple-panel-dsi` on dsi1 with a `panel-init-sequence`, a
+ * `goodix,gt9xx` touch (our GT911 is gt9xx), a `pwm-backlight` and a `regulator-fixed`
+ * panel VCC. Lift its SoC-side (dsi1 node + VOP2 route + panel/touch/backlight
+ * structure) and swap in OUR panel below. For the CM4IO DISP1 *connector pins*
+ * (backlight PWM / VCC-en / touch INT+RST), cross-ref the shipped
+ * `radxa-cm5-rpi-cm4-io-raspi-7inch-ts-disp1.dtbo`. Then this overlay only needs the
+ * VOP route fragment + those board pins filled to be complete. Radxa uses
+ * dsi,flags=<0xa03> for these panels.
  */
 /dts-v1/;
 /plugin/;

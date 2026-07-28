@@ -8,8 +8,13 @@
  * Crystal: 12 MHz for the current Waveshare RS485-CAN HAT (what's on the bench).
  *          The final sandwiched 2-CH CAN HAT+ uses 16 MHz — change can_clk below.
  *
- * TODO: confirm the SPI3 pinmux group (spi3m0) and CS0 routing against the Radxa
- * CM3 CM4IO DTS. On the 40-pin header SPI3 is MOSI19/MISO21/CLK23/CS0 24/CS1 36.
+ * NOTE: Radxa already SHIPS `rk3568-spi3-m0-cs0-mcp2515.dtbo` (compatible
+ * "radxa,cm3-rpi-cm4-io") — SPI3-M0-CS0, spi-max 10 MHz, INT on gpio4, but osc =
+ * *8 MHz* (its description says 12 MHz — a Radxa doc bug). Easiest path: enable the
+ * shipped overlay and just OVERRIDE the oscillator + INT to match our hardware.
+ * This file is the standalone/reference version with those values already set to
+ * our HAT (12 MHz, INT = GPIO0_C3). Confirm the CAN board's actual INT header pin.
+ * On the 40-pin header SPI3 = MOSI19/MISO21/CLK23/CS0 24/CS1 36.
  */
 /dts-v1/;
 /plugin/;
