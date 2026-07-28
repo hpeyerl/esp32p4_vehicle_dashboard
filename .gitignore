@@ -25,3 +25,9 @@ build/
 # --- Editor / OS ---
 .vscode/
 .DS_Store
+
+# --- Local scratch / turds (kept local, never committed) ---
+foo
+deleteme
+RUNME
+evj55_splash_c.h
