@@ -1,0 +1,50 @@
+/* generated from src/waveshare_display.c :: s_hx8399_init_cmds */
+panel-init-sequence = [
+	05 14 01 01	/* SWRESET +20ms */
+	39 00 04 b9 83 10 2e	/* MFG 0xb9 */
+	15 00 02 e9 cd	/* MFG 0xe9 */
+	15 00 02 bb 01	/* MFG 0xbb */
+	15 00 02 e9 00	/* MFG 0xe9 */
+	39 00 05 d1 67 2c ff 05	/* MFG 0xd1 */
+	39 00 04 be 11 96 89	/* MFG 0xbe */
+	39 00 04 d9 04 03 04	/* MFG 0xd9 */
+	39 00 12 b1 10 fa af af 33 33 b1 4d 2f 36 36 36 36 22 21 15 00	/* MFG 0xb1 */
+	39 00 11 b2 00 d0 27 80 00 14 40 2c 32 02 00 00 15 20 d7 00	/* MFG 0xb2 */
+	39 00 11 b4 98 a0 01 01 98 a0 68 50 01 c7 01 58 00 ff 00 ff	/* MFG 0xb4 */
+	39 00 04 b6 4d 4d e3	/* MFG 0xb6 */
+	39 00 04 bf fc 85 80	/* MFG 0xbf */
+	39 00 03 d2 33 33	/* MFG 0xd2 */
+	39 00 2c d3 00 00 00 00 64 04 00 08 08 27 27 22 2f 15 15 04 04 32 10 13 00 13 32 10 1f 00 02 32 17 fd 00 10 00 00 20 30 01 55 21 38 01 55 0f	/* MFG 0xd3 */
+	39 00 2f e0 00 0c 1a 23 2b 4f 64 69 6c 64 77 77 76 80 79 7e 85 9a 97 4d 56 64 70 00 0c 1a 23 2b 4f 64 69 6c 64 77 77 76 80 79 7e 85 9a 97 4d 56 64 76	/* MFG 0xe0 */
+	15 00 02 bd 01	/* MFG 0xbd */
+	39 00 05 b1 01 9b 01 31	/* MFG 0xb1 */
+	39 00 0a cb 80 36 12 16 c0 28 40 84 22	/* MFG 0xcb */
+	39 00 0c d3 01 00 fc 00 00 11 10 00 0e 00 01	/* MFG 0xd3 */
+	15 00 02 bd 02	/* MFG 0xbd */
+	39 00 07 b4 4e 00 33 11 33 88	/* MFG 0xb4 */
+	39 00 04 bf f2 00 02	/* MFG 0xbf */
+	15 00 02 bd 00	/* MFG 0xbd */
+	39 00 0f c0 23 23 22 11 a2 17 00 80 00 00 08 00 63 63	/* MFG 0xc0 */
+	15 00 02 c6 f9	/* MFG 0xc6 */
+	15 00 02 c7 30	/* MFG 0xc7 */
+	39 00 09 c8 00 04 04 00 00 82 13 01	/* MFG 0xc8 */
+	39 00 04 d0 07 04 05	/* MFG 0xd0 */
+	39 00 2d d5 18 18 18 18 18 18 21 20 21 20 01 00 03 02 05 04 07 06 1a 1a 1a 1a 9a 9a 9a 9a 18 18 18 18 21 20 21 20 18 18 18 18 18 18 18 18 18 18	/* MFG 0xd5 */
+	39 00 2d d6 18 18 18 18 18 18 20 21 20 21 00 01 02 03 04 05 06 07 1a 1a 1a 1a 1a 1a 1a 1a 18 18 18 18 20 21 20 21 98 98 98 98 98 98 98 98 98 98	/* MFG 0xd6 */
+	15 00 02 bd 01	/* MFG 0xbd */
+	39 00 08 e7 00 34 01 88 0e be 0f	/* MFG 0xe7 */
+	15 00 02 bd 00	/* MFG 0xbd */
+	39 00 04 c2 43 ff 10	/* MFG 0xc2 */
+	15 00 02 cc 02	/* MFG 0xcc */
+	15 00 02 bd 03	/* MFG 0xbd */
+	15 00 02 b2 80	/* MFG 0xb2 */
+	15 00 02 bd 00	/* MFG 0xbd */
+	39 00 19 d8 aa aa aa aa aa aa aa aa aa aa aa aa aa 80 2a aa aa aa aa 80 2a aa aa aa	/* MFG 0xd8 */
+	15 00 02 bd 01	/* MFG 0xbd */
+	39 00 0d d8 aa aa aa aa aa aa aa aa aa aa aa aa	/* MFG 0xd8 */
+	15 00 02 bd 02	/* MFG 0xbd */
+	39 00 0d d8 ff ff ff ff ff f0 ff ff ff ff ff f0	/* MFG 0xd8 */
+	15 00 02 bd 00	/* MFG 0xbd */
+	05 78 01 11	/* SLPOUT +120ms */
+	05 14 01 29	/* DISPON +20ms */
+];

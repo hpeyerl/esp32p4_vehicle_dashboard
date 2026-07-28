@@ -1,0 +1,59 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/*
+ * MCP2515 CAN on Radxa CM3 (RK3566) SPI3 — SocketCAN can0.
+ *
+ * Mirrors the working Pi setup (mcp251x @ 12 MHz, INT on a GPIO), retargeted to
+ * the CM3's SPI3 + the HAT's CAN_INT0 = pin 15 = GPIO0_C3 (per HAT_CONTEXT.md).
+ *
+ * Crystal: 12 MHz for the current Waveshare RS485-CAN HAT (what's on the bench).
+ *          The final sandwiched 2-CH CAN HAT+ uses 16 MHz — change can_clk below.
+ *
+ * TODO: confirm the SPI3 pinmux group (spi3m0) and CS0 routing against the Radxa
+ * CM3 CM4IO DTS. On the 40-pin header SPI3 is MOSI19/MISO21/CLK23/CS0 24/CS1 36.
+ */
+/dts-v1/;
+/plugin/;
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+#include <dt-bindings/pinctrl/rockchip.h>
+
+/ {
+	compatible = "radxa,cm3-io", "rockchip,rk3566";
+
+	can0_osc: can0-oscillator {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <12000000>;   /* RS485-CAN HAT = 12 MHz; 2-CH HAT+ = 16 MHz */
+	};
+};
+
+&spi3 {
+	status = "okay";
+	/* TODO: pinctrl-0 = <&spi3m0_pins>; (confirm group name in the base DTS) */
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	can0: can@0 {
+		compatible = "microchip,mcp2515";
+		reg = <0>;                                  /* CS0 */
+		spi-max-frequency = <10000000>;
+		clocks = <&can0_osc>;
+
+		/* CAN_INT0 = HAT pin 15 = GPIO0_C3, active-low, level-triggered */
+		interrupt-parent = <&gpio0>;
+		interrupts = <RK_PC3 IRQ_TYPE_LEVEL_LOW>;
+
+		/* optional: reset-gpios = <&gpioX Y GPIO_ACTIVE_HIGH>; */
+		vdd-supply = <&vcc3v3_sys>;
+		xceiver-supply = <&vcc3v3_sys>;
+	};
+};
+
+/*
+ * Bring up after boot:
+ *   sudo ip link set can0 up type can bitrate 500000
+ *   candump can0
+ * A second MCP2515 on CS1 (HAT pin 36) would be can1@1 with its own INT
+ * (CAN_INT1 = pin 22 = GPIO3_C6) — mirror the node above.
+ */
