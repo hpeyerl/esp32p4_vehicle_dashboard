@@ -31,6 +31,15 @@
                 {"param": "din_12Vgp",   "position": 24, "length": 8,  "gain": 1.0, "offset": 0}
             ],
             "is_extended_frame": false
+        },
+        {
+            "can_id": 1299,
+            "params": [
+                {"param": "tmpm",   "position": 0,  "length": 16, "gain": 10.0, "offset": 0},
+                {"param": "tmphs",  "position": 16, "length": 16, "gain": 10.0, "offset": 0},
+                {"param": "tmpaux", "position": 32, "length": 16, "gain": 10.0, "offset": 0}
+            ],
+            "is_extended_frame": false
         }
     ],
     "rx": []

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Herb Peyerl
+// SPDX-License-Identifier: BSD-3-Clause
+
 #pragma once
 // =============================================================
 //  EV Dashboard — CAN Signal Definitions
@@ -11,8 +14,9 @@
 // -------------------------------------------------------------
 //  CAN Frame IDs
 // -------------------------------------------------------------
-#define CAN_ID_MOTOR_TEMP       0x125   // Motor temp (same format as 0x126)
-#define CAN_ID_INVERTER_TEMP    0x126   // Inverter temp
+// 0x513 (1299): Zombie's real tmpm(motor)+tmphs(heatsink). The old 0x125/0x126
+// were speculative decodes of the Toyota inverter block, NOT the VCU's sensors.
+#define CAN_ID_VCU_TEMP         0x513   // tmpm@0/16/g10(s) tmphs@16/16/g10(s)
 #define CAN_ID_SPEED            0x257   // Vehicle speed
 #define CAN_ID_BMS_MAIN         0x356   // Pack voltage + current + battery temp
 #define CAN_ID_SOC              0x355   // State of charge
@@ -46,19 +50,26 @@
 //  Physical value = (raw * scale) + offset
 // -------------------------------------------------------------
 
-// 0x125  Motor Temp  — bits 32-47, scale 0.01, signed, °C
-#define SIG_MOTOR_TEMP_START    32
+// 0x513  tmpm (motor) — bits 0-15, gain 10 -> scale 0.1, signed, °C
+#define SIG_MOTOR_TEMP_START    0
 #define SIG_MOTOR_TEMP_LEN      16
-#define SIG_MOTOR_TEMP_SCALE    0.01f
+#define SIG_MOTOR_TEMP_SCALE    0.1f
 #define SIG_MOTOR_TEMP_OFFSET   0.0f
 #define SIG_MOTOR_TEMP_SIGNED   true
 
-// 0x126  Inverter Temp — bits 32-47, scale 0.01, signed, °C
-#define SIG_INV_TEMP_START      32
+// 0x513  tmphs (inverter heatsink) — bits 16-31, gain 10 -> scale 0.1, signed, °C
+#define SIG_INV_TEMP_START      16
 #define SIG_INV_TEMP_LEN        16
-#define SIG_INV_TEMP_SCALE      0.01f
+#define SIG_INV_TEMP_SCALE      0.1f
 #define SIG_INV_TEMP_OFFSET     0.0f
 #define SIG_INV_TEMP_SIGNED     true
+
+// 0x513  tmpaux (Zombie analog aux/ambient) — bits 32-47, gain 10 -> scale 0.1, signed
+#define SIG_AUX_TEMP_START      32
+#define SIG_AUX_TEMP_LEN        16
+#define SIG_AUX_TEMP_SCALE      0.1f
+#define SIG_AUX_TEMP_OFFSET     0.0f
+#define SIG_AUX_TEMP_SIGNED     true
 
 // 0x257  Speed — bits 0-15, scale 0.1, signed, MPH
 #define SIG_SPEED_START         0

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Herb Peyerl
+// SPDX-License-Identifier: BSD-3-Clause
+
 // =============================================================
 //  dashboard_ui.cpp — EV Dashboard LVGL UI  v3
 //
@@ -52,8 +55,8 @@ LV_FONT_DECLARE(lv_font_montserrat_110)
 
 // Sub-screen "safe area": keep content clear of the top-left HOME button and
 // the far-right ◀▶ arrow strip so the nav controls never occlude content.
-#define NAV_SAFE_TOP    84
-#define NAV_SAFE_RIGHT  124
+#define NAV_SAFE_TOP    16
+#define NAV_SAFE_RIGHT  240   // reserves the 🏠 ◀ ▶ cluster (3 x 64, 16px gaps)
 
 // ── Layout — see dashboard_layout.h (selected by DISPLAY_TARGET) ─────────
 // Layout constants (LEFT_W, RIGHT_W, BOT_H, ARC_R, METER_R etc.)
@@ -731,8 +734,20 @@ void dashboard_ui_update(const DashData *d)
 
     // ── Meter gauge update helper ─────────────────────────────────────────
     // Updates needle position and value label; only calls set_style on color change
+    // `stale` greys the readout: on GS450H the inverter-sourced motor/heatsink
+    // temps are only meaningful while running, so dim them when opmode==Off.
     auto uptemp = [](Meter *m, float v, float vmin, float vmax,
-                     float warn, float crit, lv_color_t *last_col) {
+                     float warn, float crit, lv_color_t *last_col, bool stale) {
+        if (stale) {
+            lv_color_t nc = CLR_TEXT_DIM;
+            if (memcmp(&nc, last_col, sizeof nc) != 0) {
+                update_needle(m, 0.0f);
+                lv_label_set_text(m->lbl_val, "--");
+                lv_obj_set_style_text_color(m->lbl_val, nc, 0);
+                *last_col = nc;
+            }
+            return;
+        }
         float pct = (v - vmin) / (vmax - vmin);
         update_needle(m, pct);
         char b[12];
@@ -748,13 +763,14 @@ void dashboard_ui_update(const DashData *d)
     static lv_color_t lc_inv = {0}, lc_mot = {0}, lc_bat = {0};
     static lv_color_t lc_pv  = {0}, lc_pa  = {0};
 
-    // Temp meters: scale 0-150°C
+    // Temp meters: scale 0-150°C. Motor/inverter grey out when the VCU is Off.
+    bool temp_stale = (d->vcu_opmode == 0);
     uptemp(&s_inv_meter, d->inverter_temp_c, 0, 150,
-           WARN_INV_TEMP_C, CRIT_INV_TEMP_C, &lc_inv);
+           WARN_INV_TEMP_C, CRIT_INV_TEMP_C, &lc_inv, temp_stale);
     uptemp(&s_mot_meter, d->motor_temp_c,    0, 150,
-           WARN_MOTOR_TEMP_C, CRIT_MOTOR_TEMP_C, &lc_mot);
+           WARN_MOTOR_TEMP_C, CRIT_MOTOR_TEMP_C, &lc_mot, temp_stale);
     uptemp(&s_bat_meter, d->batt_temp_c,     0,  60,
-           WARN_BATT_TEMP_C, CRIT_BATT_TEMP_C, &lc_bat);
+           WARN_BATT_TEMP_C, CRIT_BATT_TEMP_C, &lc_bat, false);
 
     // Pack voltage meter: scale 300-420V
     {
@@ -970,6 +986,7 @@ void dashboard_ui_update(const DashData *d)
 static void prv_nav_arrow_cb(lv_event_t *e)
 {
     int dir = (int)(intptr_t)lv_event_get_user_data(e);
+    if (dir == 0) { dashboard_ui_set_screen(DASH_SCREEN_HOME); return; }  // 🏠
 #ifdef BMS_HTTP
     static const dash_screen_t order[] = { DASH_SCREEN_HOME, DASH_SCREEN_STATUS,
                                            DASH_SCREEN_BMS, DASH_SCREEN_SETTINGS };
@@ -988,27 +1005,31 @@ static void prv_nav_arrow_cb(lv_event_t *e)
 // Two thumb-friendly ◀ ▶ buttons at far-right-middle to cycle screens.
 static void prv_add_arrow_nav(lv_obj_t *screen)
 {
-    const struct { const char *sym; int dir; int xoff; } b[2] = {
-        { LV_SYMBOL_LEFT,  -1, -62 },
-        { LV_SYMBOL_RIGHT, +1,  -6 },
+    // Far-right-middle cluster, one reachable row: 🏠 ◀ ▶ (filled home at the
+    // left, then the screen-cycle arrows) — no more reaching for the top-left.
+    // 64px targets with 16px gaps so fat fingers don't fat-finger a neighbour.
+    const struct { const char *sym; int dir; int xoff; int yoff; int home; } b[3] = {
+        { LV_SYMBOL_HOME,   0, -168, 0, 1 },
+        { LV_SYMBOL_LEFT,  -1,  -88, 0, 0 },
+        { LV_SYMBOL_RIGHT, +1,   -8, 0, 0 },
     };
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 3; i++) {
         lv_obj_t *btn = lv_obj_create(screen);
-        lv_obj_set_size(btn, 52, 52);
-        lv_obj_align(btn, LV_ALIGN_RIGHT_MID, b[i].xoff, 0);
-        lv_obj_set_style_bg_color(btn, CLR_PANEL, 0);
+        lv_obj_set_size(btn, 64, 64);
+        lv_obj_align(btn, LV_ALIGN_RIGHT_MID, b[i].xoff, b[i].yoff);
+        lv_obj_set_style_bg_color(btn, b[i].home ? CLR_CYAN : CLR_PANEL, 0);
         lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
         lv_obj_set_style_border_color(btn, CLR_CYAN, 0);
         lv_obj_set_style_border_width(btn, 1, 0);
-        lv_obj_set_style_radius(btn, 10, 0);
+        lv_obj_set_style_radius(btn, 12, 0);
         lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_ext_click_area(btn, 12);
+        lv_obj_set_ext_click_area(btn, 8);   // 8+8 = 16 = the gap, no overlap
         lv_obj_add_event_cb(btn, prv_nav_arrow_cb, LV_EVENT_CLICKED,
                             (void *)(intptr_t)b[i].dir);
         lv_obj_t *lbl = lv_label_create(btn);
         lv_label_set_text(lbl, b[i].sym);
-        lv_obj_set_style_text_color(lbl, CLR_CYAN, 0);
+        lv_obj_set_style_text_color(lbl, b[i].home ? CLR_BG : CLR_CYAN, 0);
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
         lv_obj_center(lbl);
     }
@@ -1016,23 +1037,11 @@ static void prv_add_arrow_nav(lv_obj_t *screen)
 
 static void prv_add_home_button(lv_obj_t *screen)
 {
+    // No visible top-left button (unreachable when steering-wheel-mounted — the
+    // 🏠 in the right-middle nav cluster replaces it). Keep tap-anywhere-home as
+    // a bonus reachability fallback on the (non-interactive) sub-screens.
     lv_obj_add_flag(screen, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(screen, prv_nav_tap_cb, LV_EVENT_CLICKED, (void *)(intptr_t)DASH_SCREEN_HOME);
-
-    lv_obj_t *btn = lv_button_create(screen);
-    lv_obj_set_size(btn, 170, 56);
-    lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 14, 14);
-    lv_obj_set_style_bg_color(btn, CLR_CYAN, 0);
-    lv_obj_add_event_cb(btn, prv_nav_tap_cb, LV_EVENT_CLICKED, (void *)(intptr_t)DASH_SCREEN_HOME);
-    lv_obj_t *l = lv_label_create(btn);
-    lv_label_set_text(l, LV_SYMBOL_LEFT "  HOME");
-    lv_obj_set_style_text_color(l, CLR_BG, 0);
-    lv_obj_center(l);
-    lv_obj_move_foreground(btn);
-    // Also bubble the button's events up to the screen's handler above, so a
-    // direct tap on the button navigates home even if its own CLICKED doesn't
-    // propagate (observed LVGL hit-test quirk with the overlaid label).
-    lv_obj_add_flag(btn, LV_OBJ_FLAG_EVENT_BUBBLE);
 }
 
 static void prv_ensure_settings_screen(void)
@@ -1054,10 +1063,12 @@ static void prv_ensure_settings_screen(void)
 
 // ── Status screen: clean live-values grid, fed from g_dash (CAN) ─────────
 enum { ST_SOC, ST_SPEED, ST_POWER, ST_PACKV, ST_PACKA, ST_RANGE,
-       ST_MOTOR, ST_INV, ST_BATT, ST_AUX, ST_GEAR, ST_ODO, ST_TRIP, ST_CANLOAD, ST_N };
+       ST_MOTOR, ST_INV, ST_BATT, ST_SHUNT, ST_AUX, ST_GEAR, ST_ODO,
+       ST_TRIP, ST_CANLOAD, ST_N };
 static const char *st_name[ST_N] = {
     "SOC", "SPEED", "POWER", "PACK V", "PACK A", "RANGE",
-    "MOTOR", "INVERTER", "BATTERY", "AUX 12V", "GEAR", "ODO", "TRIP", "CAN LOAD" };
+    "MOTOR", "INVERTER", "BATTERY", "SHUNT", "AUX 12V", "GEAR", "ODO",
+    "TRIP", "CAN LOAD" };
 static lv_obj_t *s_st_val[ST_N];
 
 static void prv_ensure_status_screen(void)
@@ -1116,9 +1127,24 @@ static void prv_update_status(const DashData *d)
     snprintf(b, sizeof b, "%.0f V",  d->pack_volts);      lv_label_set_text(s_st_val[ST_PACKV], b);
     snprintf(b, sizeof b, "%.0f A",  d->pack_amps);       lv_label_set_text(s_st_val[ST_PACKA], b);
     snprintf(b, sizeof b, "%.0f mi", d->range_dist);      lv_label_set_text(s_st_val[ST_RANGE], b);
-    snprintf(b, sizeof b, "%.0f C",  d->motor_temp_c);    lv_label_set_text(s_st_val[ST_MOTOR], b);
-    snprintf(b, sizeof b, "%.0f C",  d->inverter_temp_c); lv_label_set_text(s_st_val[ST_INV],   b);
+    // Motor/inverter temps are inverter-sourced (GS450H) — grey + "--" when Off.
+    int t_stale = (d->vcu_opmode == 0);
+    static int last_t_stale = -1;
+    if (t_stale != last_t_stale) {
+        lv_color_t c = t_stale ? CLR_TEXT_DIM : CLR_TEXT_BRIGHT;
+        lv_obj_set_style_text_color(s_st_val[ST_MOTOR], c, 0);
+        lv_obj_set_style_text_color(s_st_val[ST_INV],   c, 0);
+        last_t_stale = t_stale;
+    }
+    if (t_stale) {
+        lv_label_set_text(s_st_val[ST_MOTOR], "--");
+        lv_label_set_text(s_st_val[ST_INV],   "--");
+    } else {
+        snprintf(b, sizeof b, "%.0f C", d->motor_temp_c);    lv_label_set_text(s_st_val[ST_MOTOR], b);
+        snprintf(b, sizeof b, "%.0f C", d->inverter_temp_c); lv_label_set_text(s_st_val[ST_INV],   b);
+    }
     snprintf(b, sizeof b, "%.0f C",  d->batt_temp_c);     lv_label_set_text(s_st_val[ST_BATT],  b);
+    snprintf(b, sizeof b, "%.0f C",  d->aux_temp_c);      lv_label_set_text(s_st_val[ST_SHUNT], b);
     snprintf(b, sizeof b, "%.1f V",  d->aux_volts);       lv_label_set_text(s_st_val[ST_AUX],   b);
     lv_label_set_text(s_st_val[ST_GEAR], d->gear < 4 ? gnm[d->gear] : "-");
     snprintf(b, sizeof b, "%.0f",    d->odo_total_miles); lv_label_set_text(s_st_val[ST_ODO],   b);
@@ -1130,9 +1156,9 @@ static void prv_update_status(const DashData *d)
 // ── BMS screen: pack summary + per-module cell grid (from HTTP /api/data) ──
 #define BMS_UI_MODS   8
 #define BMS_UI_CELLS  12
-enum { BS_PACK, BS_SOC, BS_LOW, BS_HIGH, BS_DELTA, BS_TEMP, BS_CURR, BS_N };
+enum { BS_PACK, BS_SOC, BS_LOW, BS_HIGH, BS_DELTA, BS_MODDLT, BS_TEMP, BS_CURR, BS_N };
 static const char *bs_name[BS_N] =
-    { "PACK", "SOC", "MIN CELL", "MAX CELL", "DELTA", "AVG TEMP", "CURRENT" };
+    { "PACK", "SOC", "MIN CELL", "MAX CELL", "CELL DLT", "MOD DLT", "AVG TEMP", "CURRENT" };
 static lv_obj_t *s_bms_sumval[BS_N];
 static lv_obj_t *s_bms_modcard[BMS_UI_MODS];
 static lv_obj_t *s_bms_modv[BMS_UI_MODS];
@@ -1294,11 +1320,30 @@ static void prv_update_bms(void)
     snprintf(b, sizeof b, "%.1f A", g_bms.currentA); lv_label_set_text(s_bms_sumval[BS_CURR], b);
 
     int nm = g_bms.numModules; if (nm > BMS_UI_MODS) nm = BMS_UI_MODS;
+
+    // Module-to-module spread — the number that matters for this pack. The CSCs
+    // balance perfectly WITHIN a module but never across, so this is the real
+    // imbalance (and CELL DLT above is ~1/12 of it). modLo/modHi also drive the
+    // per-module voltage colour so the high/low outliers pop.
+    float modLo = 1e9f, modHi = -1e9f;
+    for (int m = 0; m < nm; m++) {
+        float v = g_bms.modules[m].voltage;
+        if (v < modLo) modLo = v;
+        if (v > modHi) modHi = v;
+    }
+    float modSpan = (nm > 0) ? (modHi - modLo) : 0.0f;
+    snprintf(b, sizeof b, "%.2f V", modSpan); lv_label_set_text(s_bms_sumval[BS_MODDLT], b);
+    lv_obj_set_style_text_color(s_bms_sumval[BS_MODDLT],
+        modSpan < 0.30f ? CLR_GREEN : modSpan < 1.0f ? CLR_ORANGE : CLR_RED, 0);
+
     for (int m = 0; m < BMS_UI_MODS; m++) {
         if (m >= nm) { lv_obj_add_flag(s_bms_modcard[m], LV_OBJ_FLAG_HIDDEN); continue; }
         lv_obj_clear_flag(s_bms_modcard[m], LV_OBJ_FLAG_HIDDEN);
         BmsModule *bm = &g_bms.modules[m];
         snprintf(b, sizeof b, "%.2f V", bm->voltage);     lv_label_set_text(s_bms_modv[m], b);
+        // colour the module voltage by its offset: blue = low SoC, red = high
+        float mf = (modSpan > 0.001f) ? (bm->voltage - modLo) / modSpan : 0.5f;
+        lv_obj_set_style_text_color(s_bms_modv[m], bms_heat(mf, 1.0f), 0);
         snprintf(b, sizeof b, "%d/%d C", bm->t1, bm->t2); lv_label_set_text(s_bms_modt[m], b);
         lv_obj_set_style_border_color(s_bms_modcard[m], bm->faulted ? CLR_RED : CLR_BORDER, 0);
         int nc = bm->num_cells; if (nc > BMS_UI_CELLS) nc = BMS_UI_CELLS;

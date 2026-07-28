@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Herb Peyerl
+// SPDX-License-Identifier: BSD-3-Clause
+
 // =============================================================
 //  can_parser.h — CAN Frame Parser Public API
 //
@@ -22,9 +25,12 @@ typedef struct {
     float   pack_amps;      // A  (+ = discharge / motoring, – = regen)
     float   batt_temp_c;    // °C
 
-    // Thermal (0x125, 0x126)
+    // Thermal (0x513: tmpm, tmphs, tmpaux). On GS450H tmpm/tmphs come from the
+    // inverter and are only valid when running; aux_temp_c (tmpaux) is a real
+    // Zombie analog input that reads ambient/coolant.
     float   motor_temp_c;
     float   inverter_temp_c;
+    float   aux_temp_c;
 
     // 12V system (0x210)
     float   aux_volts;

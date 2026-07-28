@@ -11,7 +11,7 @@
 #
 #  Syntax:  can t <param> <canid> <startbit> <length_bits> <gain>
 #  NOTE: the CAN-ID field is DECIMAL.
-#        1296 = 0x510    1297 = 0x511    1298 = 0x512
+#        1296 = 0x510   1297 = 0x511   1298 = 0x512   1299 = 0x513
 #        (chosen clear of the busy 0x080-0x1FF inverter range)
 #
 #  Dashboard decodes little-endian; signed params (speed, dir,
@@ -49,5 +49,11 @@ can t cruisespeed 1298 0  16 1
 can t cruisestt   1298 16 8  1
 # park pawl sense: wire the transmission P-position contact to din_12Vgp
 can t din_12Vgp   1298 24 8  1
+
+# -- 0x513 (1299): real VCU temps (tmpm=motor, tmphs=heatsink) --
+# Replaces the old speculative 0x125/0x126 inverter-block decode.
+can t tmpm   1299 0  16 10
+can t tmphs  1299 16 16 10
+can t tmpaux 1299 32 16 10
 
 save

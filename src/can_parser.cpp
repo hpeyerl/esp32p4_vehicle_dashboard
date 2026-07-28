@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Herb Peyerl
+// SPDX-License-Identifier: BSD-3-Clause
+
 // =============================================================
 //  can_parser.cpp — CAN Frame Parser Implementation
 // =============================================================
@@ -44,19 +47,20 @@ void parse_can_frame(uint32_t id, const uint8_t *data, uint32_t now_ms)
 {
     switch (id) {
 
-    case CAN_ID_MOTOR_TEMP:                             // 0x125
+    case CAN_ID_VCU_TEMP:                               // 0x513: tmpm + tmphs
         g_dash.motor_temp_c = can_signal(data,
             SIG_MOTOR_TEMP_START, SIG_MOTOR_TEMP_LEN,
             SIG_MOTOR_TEMP_SCALE, SIG_MOTOR_TEMP_OFFSET,
             SIG_MOTOR_TEMP_SIGNED);
-        g_dash.last_ms_0x125 = now_ms;
-        break;
-
-    case CAN_ID_INVERTER_TEMP:                          // 0x126
         g_dash.inverter_temp_c = can_signal(data,
             SIG_INV_TEMP_START, SIG_INV_TEMP_LEN,
             SIG_INV_TEMP_SCALE, SIG_INV_TEMP_OFFSET,
             SIG_INV_TEMP_SIGNED);
+        g_dash.aux_temp_c = can_signal(data,
+            SIG_AUX_TEMP_START, SIG_AUX_TEMP_LEN,
+            SIG_AUX_TEMP_SCALE, SIG_AUX_TEMP_OFFSET,
+            SIG_AUX_TEMP_SIGNED);
+        g_dash.last_ms_0x125 = now_ms;
         g_dash.last_ms_0x126 = now_ms;
         break;
 
