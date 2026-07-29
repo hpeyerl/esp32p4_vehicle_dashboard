@@ -732,6 +732,26 @@ void dashboard_ui_update(const DashData *d)
 
     char buf[32];
 
+    // ── CAN staleness dim ─────────────────────────────────────────────────
+    // g_dash values FREEZE when frames stop (held, not zeroed — see the CAN read
+    // loop in main_linux.cpp), so on a stale/dropped feed the numbers already hold;
+    // we just dim the primary readouts by opacity to signal "held, not live". The
+    // CAN dot (green<2s / amber<10s / red) conveys the severity; this is the cluster.
+    {
+        uint32_t sn_ms    = (uint32_t)(esp_timer_get_time() / 1000);
+        bool     can_stale = (d->last_ms_any != 0) && ((sn_ms - d->last_ms_any) > 3000);
+        static int stale_prev = -1;
+        if ((int)can_stale != stale_prev) {
+            lv_opa_t o = can_stale ? LV_OPA_40 : LV_OPA_COVER;
+            if (s_lbl_speed)   lv_obj_set_style_text_opa(s_lbl_speed,   o, 0);
+            if (s_lbl_soc_pct) lv_obj_set_style_text_opa(s_lbl_soc_pct, o, 0);
+            if (s_lbl_pwr_val) lv_obj_set_style_text_opa(s_lbl_pwr_val, o, 0);
+            if (s_bar_soc)     lv_obj_set_style_arc_opa (s_bar_soc, o, LV_PART_INDICATOR);
+            if (s_bar_pwr)     lv_obj_set_style_arc_opa (s_bar_pwr, o, LV_PART_INDICATOR);
+            stale_prev = (int)can_stale;
+        }
+    }
+
     // ── Meter gauge update helper ─────────────────────────────────────────
     // Updates needle position and value label; only calls set_style on color change
     // `stale` greys the readout: on GS450H the inverter-sourced motor/heatsink
