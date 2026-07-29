@@ -74,22 +74,32 @@ void parse_can_frame(uint32_t id, const uint8_t *data, uint32_t now_ms)
         g_dash.last_ms_0x257 = now_ms;
         break;
 
-    case CAN_ID_SOC:                                    // 0x355
-        g_dash.soc_pct = can_signal(data,
+    case CAN_ID_SOC: {                                  // 0x355
+        float soc = can_signal(data,
             SIG_SOC_START, SIG_SOC_LEN,
             SIG_SOC_SCALE, SIG_SOC_OFFSET,
             SIG_SOC_SIGNED);
-        if (g_dash.soc_pct > 100.0f) g_dash.soc_pct = 100.0f;
-        if (g_dash.soc_pct <   0.0f) g_dash.soc_pct =   0.0f;
-        g_dash.range_dist = g_dash.soc_pct * RANGE_FULL_SOC_MILES / 100.0f;
         g_dash.last_ms_0x355 = now_ms;
+        // Glitch gate: a CAN-error zero-burst decodes SoC to 0; SoC can't jump from a
+        // healthy value straight to 0 in one frame -> reject, hold the last good SoC.
+        if (soc <= 0.0f && g_dash.soc_pct > 2.0f) break;
+        if (soc > 100.0f) soc = 100.0f;
+        if (soc <   0.0f) soc =   0.0f;
+        g_dash.soc_pct    = soc;
+        g_dash.range_dist = soc * RANGE_FULL_SOC_MILES / 100.0f;
         break;
+    }
 
-    case CAN_ID_BMS_MAIN:                               // 0x356
-        g_dash.pack_volts = can_signal(data,
+    case CAN_ID_BMS_MAIN: {                             // 0x356
+        g_dash.last_ms_0x356 = now_ms;
+        float pv = can_signal(data,
             SIG_PACK_VOLTS_START, SIG_PACK_VOLTS_LEN,
             SIG_PACK_VOLTS_SCALE, SIG_PACK_VOLTS_OFFSET,
             SIG_PACK_VOLTS_SIGNED);
+        // Glitch gate: a live traction pack is never ~0V; a CAN-error zero-burst
+        // decodes to 0 -> reject the whole frame, hold last good V/A/temp/power.
+        if (pv < 50.0f) break;
+        g_dash.pack_volts = pv;
         g_dash.pack_amps = can_signal(data,
             SIG_PACK_AMPS_START, SIG_PACK_AMPS_LEN,
             SIG_PACK_AMPS_SCALE, SIG_PACK_AMPS_OFFSET,
@@ -100,8 +110,8 @@ void parse_can_frame(uint32_t id, const uint8_t *data, uint32_t now_ms)
             SIG_BATT_TEMP_SIGNED);
         // Positive = discharge (motoring), negative = regen
         g_dash.power_kw = (g_dash.pack_volts * g_dash.pack_amps) / 1000.0f;
-        g_dash.last_ms_0x356 = now_ms;
         break;
+    }
 
     case CAN_ID_AUX_BATT:                              // 0x210
         g_dash.aux_volts = can_signal(data,
