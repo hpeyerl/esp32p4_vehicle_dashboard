@@ -932,13 +932,19 @@ void dashboard_ui_update(const DashData *d)
     // ── CAN + WiFi status indicators ──────────────────────────────────────
     {
         uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
-        bool can_ok  = !can_signal_stale(d->last_ms_0x355, now_ms, 2000);
+        // CAN liveness keyed on ANY received frame (robust vs a single ID like 0x355):
+        //   <2s = fresh (green), 2-10s = stale/holding last-known (amber), >10s or never = dead (red)
+        uint32_t can_age  = now_ms - d->last_ms_any;
+        int      can_state = (d->last_ms_any == 0 || can_age > 10000) ? 2
+                             : (can_age > 2000) ? 1 : 0;
         bool wifi_ok = wifi_manager_is_connected();
-        static bool last_can_ok  = false;
-        static bool last_wifi_ok = false;
-        if (can_ok != last_can_ok) {
-            lv_obj_set_style_text_color(s_dot_can, can_ok ? CLR_GREEN : CLR_RED, 0);
-            last_can_ok = can_ok;
+        static int  last_can_state = -1;
+        static bool last_wifi_ok   = false;
+        if (can_state != last_can_state) {
+            lv_color_t cc = (can_state == 0) ? CLR_GREEN
+                          : (can_state == 1) ? CLR_AMBER : CLR_RED;
+            lv_obj_set_style_text_color(s_dot_can, cc, 0);
+            last_can_state = can_state;
         }
         if (wifi_ok != last_wifi_ok) {
             lv_obj_set_style_text_color(s_dot_wifi, wifi_ok ? CLR_GREEN : CLR_RED, 0);

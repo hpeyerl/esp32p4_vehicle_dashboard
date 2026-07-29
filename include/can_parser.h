@@ -79,6 +79,7 @@ typedef struct {
     uint32_t last_ms_0x355;
     uint32_t last_ms_0x356;
     uint32_t last_ms_0x210;
+    uint32_t last_ms_any;    // stamped on EVERY received frame -> true CAN-alive liveness
 } DashData;
 
 // Global instance — write locked by g_dash_mutex in main.cpp

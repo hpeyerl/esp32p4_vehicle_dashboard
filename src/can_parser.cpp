@@ -45,6 +45,8 @@ static float can_signal(const uint8_t *data,
 // ── Public API ────────────────────────────────────────────────────────────
 void parse_can_frame(uint32_t id, const uint8_t *data, uint32_t now_ms)
 {
+    g_dash.last_ms_any = now_ms;   // any received frame keeps the CAN icon alive
+
     switch (id) {
 
     case CAN_ID_VCU_TEMP:                               // 0x513: tmpm + tmphs
