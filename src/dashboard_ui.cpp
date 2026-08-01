@@ -1217,16 +1217,21 @@ static void prv_ensure_status_screen(void)
 
     s_regen_slider = lv_slider_create(rc);
     lv_obj_set_width(s_regen_slider, LCD_H_RES - NAV_SAFE_RIGHT - 24 - 28);
+    lv_obj_set_height(s_regen_slider, 28);                 // fat bar for a fingertip
     lv_obj_align(s_regen_slider, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_slider_set_range(s_regen_slider, REGEN_MAG_MIN, REGEN_MAG_MAX);  // magnitude; floor guards weak end
     lv_slider_set_value(s_regen_slider, start_mag, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(s_regen_slider, CLR_BORDER, LV_PART_MAIN);
     lv_obj_set_style_bg_color(s_regen_slider, CLR_GREEN, LV_PART_INDICATOR);
     lv_obj_set_style_bg_color(s_regen_slider, CLR_GREEN, LV_PART_KNOB);
+    lv_obj_set_style_pad_all(s_regen_slider, 14, LV_PART_KNOB);  // knob bulges past the bar
+    lv_obj_set_ext_click_area(s_regen_slider, 22);        // vertical near-misses still grab it
     lv_obj_add_event_cb(s_regen_slider, prv_regen_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
     lv_obj_add_event_cb(s_regen_slider, prv_regen_released_cb, LV_EVENT_RELEASED, NULL);
 
-    prv_add_home_button(s_scr_status);
+    // NOTE: no prv_add_home_button() here — that makes the WHOLE screen a
+    // tap-to-home target, which steals taps meant for the slider. This screen is
+    // now interactive; home is still reachable via the 🏠 in the arrow cluster.
     prv_add_arrow_nav(s_scr_status);
 }
 
