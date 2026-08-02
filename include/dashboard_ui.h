@@ -12,7 +12,7 @@ extern "C" {
 typedef enum {
     DASH_SCREEN_HOME     = 0,
     DASH_SCREEN_SETTINGS = 1,
-    DASH_SCREEN_STATUS   = 2,
+    DASH_SCREEN_VCU      = 2,   // live VCU values grid (formerly "STATUS")
     DASH_SCREEN_BMS      = 3,
 } dash_screen_t;
 

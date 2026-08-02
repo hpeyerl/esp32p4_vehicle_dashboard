@@ -79,8 +79,8 @@ static void handle_nav(int fd, const char *path)
         q += 7;
         if      (!strncasecmp(q, "home",     4)) scr = DASH_SCREEN_HOME;
         else if (!strncasecmp(q, "settings", 8)) scr = DASH_SCREEN_SETTINGS;
-        else if (!strncasecmp(q, "status",   6)) scr = DASH_SCREEN_STATUS;
-        else if (!strncasecmp(q, "vcu",      3)) scr = DASH_SCREEN_STATUS;
+        else if (!strncasecmp(q, "status",   6)) scr = DASH_SCREEN_VCU;
+        else if (!strncasecmp(q, "vcu",      3)) scr = DASH_SCREEN_VCU;
         else if (!strncasecmp(q, "bms",      3)) scr = DASH_SCREEN_BMS;
         else ok = 0;
     } else ok = 0;
@@ -101,8 +101,8 @@ static int parse_screen_q(const char *path, dash_screen_t *out)
     q += 7;
     if      (!strncasecmp(q, "home",     4)) *out = DASH_SCREEN_HOME;
     else if (!strncasecmp(q, "settings", 8)) *out = DASH_SCREEN_SETTINGS;
-    else if (!strncasecmp(q, "status",   6)) *out = DASH_SCREEN_STATUS;
-    else if (!strncasecmp(q, "vcu",      3)) *out = DASH_SCREEN_STATUS;
+    else if (!strncasecmp(q, "status",   6)) *out = DASH_SCREEN_VCU;
+    else if (!strncasecmp(q, "vcu",      3)) *out = DASH_SCREEN_VCU;
     else if (!strncasecmp(q, "bms",      3)) *out = DASH_SCREEN_BMS;
     else return 0;
     return 1;

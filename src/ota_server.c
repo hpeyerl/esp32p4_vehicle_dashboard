@@ -317,7 +317,7 @@ static esp_err_t prv_nav_handler(httpd_req_t *req)
 
     dash_screen_t scr = DASH_SCREEN_HOME;
     if      (strcmp(screen, "settings") == 0) scr = DASH_SCREEN_SETTINGS;
-    else if (strcmp(screen, "status")   == 0) scr = DASH_SCREEN_STATUS;
+    else if (strcmp(screen, "status")   == 0) scr = DASH_SCREEN_VCU;
 
     dashboard_ui_set_screen(scr);
 

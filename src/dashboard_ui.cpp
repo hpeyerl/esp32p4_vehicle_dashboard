@@ -268,7 +268,7 @@ static void update_needle(Meter *m, float pct)
 // ── Screen management ────────────────────────────────────────
 static lv_obj_t    *s_scr_home     = NULL;
 static lv_obj_t    *s_scr_settings = NULL;
-static lv_obj_t    *s_scr_status   = NULL;
+static lv_obj_t    *s_scr_vcu   = NULL;
 static dash_screen_t s_cur_screen  = DASH_SCREEN_HOME;
 static lv_display_t *s_disp        = NULL;
 static volatile dash_screen_t s_pending_screen    = DASH_SCREEN_HOME;
@@ -692,8 +692,8 @@ void dashboard_ui_create(lv_display_t *disp)
 }
 // Forward declarations for screen helpers
 static void prv_ensure_settings_screen(void);
-static void prv_ensure_status_screen(void);
-static void prv_update_status(const DashData *d);
+static void prv_ensure_vcu_screen(void);
+static void prv_update_vcu(const DashData *d);
 static void prv_add_arrow_nav(lv_obj_t *screen);
 #ifdef BMS_HTTP
 static lv_obj_t *s_scr_bms = NULL;
@@ -715,9 +715,9 @@ void dashboard_ui_update(const DashData *d)
                 prv_ensure_settings_screen();
                 lv_screen_load(s_scr_settings);
                 break;
-            case DASH_SCREEN_STATUS:
-                prv_ensure_status_screen();
-                lv_screen_load(s_scr_status);
+            case DASH_SCREEN_VCU:
+                prv_ensure_vcu_screen();
+                lv_screen_load(s_scr_vcu);
                 break;
 #ifdef BMS_HTTP
             case DASH_SCREEN_BMS:
@@ -996,7 +996,7 @@ void dashboard_ui_update(const DashData *d)
     }
 
     // ── Status screen live values (cheap; no-ops until that screen is built) ─
-    prv_update_status(d);
+    prv_update_vcu(d);
 #ifdef BMS_HTTP
     prv_update_bms();   // no-op until BMS screen built
 #endif
@@ -1014,10 +1014,10 @@ static void prv_nav_arrow_cb(lv_event_t *e)
     int dir = (int)(intptr_t)lv_event_get_user_data(e);
     if (dir == 0) { dashboard_ui_set_screen(DASH_SCREEN_HOME); return; }  // 🏠
 #ifdef BMS_HTTP
-    static const dash_screen_t order[] = { DASH_SCREEN_HOME, DASH_SCREEN_STATUS,
+    static const dash_screen_t order[] = { DASH_SCREEN_HOME, DASH_SCREEN_VCU,
                                            DASH_SCREEN_BMS, DASH_SCREEN_SETTINGS };
 #else
-    static const dash_screen_t order[] = { DASH_SCREEN_HOME, DASH_SCREEN_STATUS,
+    static const dash_screen_t order[] = { DASH_SCREEN_HOME, DASH_SCREEN_VCU,
                                            DASH_SCREEN_SETTINGS };
 #endif
     const int n = (int)(sizeof(order) / sizeof(order[0]));
@@ -1146,15 +1146,15 @@ extern "C" void dashboard_ui_set_regen_current(float pct)
     lv_obj_set_style_text_color(s_regen_lbl, CLR_TEXT_BRIGHT, 0);
 }
 
-static void prv_ensure_status_screen(void)
+static void prv_ensure_vcu_screen(void)
 {
-    if (s_scr_status) return;
-    s_scr_status = lv_obj_create(NULL);
-    lv_obj_set_style_bg_color(s_scr_status, CLR_BG, 0);
-    lv_obj_set_style_bg_opa(s_scr_status, LV_OPA_COVER, 0);
-    lv_obj_clear_flag(s_scr_status, LV_OBJ_FLAG_SCROLLABLE);
+    if (s_scr_vcu) return;
+    s_scr_vcu = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(s_scr_vcu, CLR_BG, 0);
+    lv_obj_set_style_bg_opa(s_scr_vcu, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(s_scr_vcu, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *grid = lv_obj_create(s_scr_status);
+    lv_obj_t *grid = lv_obj_create(s_scr_vcu);
     lv_obj_set_size(grid, LCD_H_RES - 12 - NAV_SAFE_RIGHT, LCD_V_RES - NAV_SAFE_TOP - 12);
     lv_obj_align(grid, LV_ALIGN_TOP_LEFT, 12, NAV_SAFE_TOP);
     lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
@@ -1189,7 +1189,7 @@ static void prv_ensure_status_screen(void)
     }
 
     // ── Regen limit strip: lower band, clear of the right-middle nav cluster ──
-    lv_obj_t *rc = lv_obj_create(s_scr_status);
+    lv_obj_t *rc = lv_obj_create(s_scr_vcu);
     lv_obj_set_size(rc, LCD_H_RES - NAV_SAFE_RIGHT - 24, 96);
     lv_obj_align(rc, LV_ALIGN_BOTTOM_LEFT, 12, -12);
     lv_obj_set_style_bg_color(rc, CLR_PANEL, 0);
@@ -1234,10 +1234,10 @@ static void prv_ensure_status_screen(void)
     // NOTE: no prv_add_home_button() here — that makes the WHOLE screen a
     // tap-to-home target, which steals taps meant for the slider. This screen is
     // now interactive; home is still reachable via the 🏠 in the arrow cluster.
-    prv_add_arrow_nav(s_scr_status);
+    prv_add_arrow_nav(s_scr_vcu);
 }
 
-static void prv_update_status(const DashData *d)
+static void prv_update_vcu(const DashData *d)
 {
     if (!s_st_val[0]) return;   // status screen not built yet
     static const char *gnm[] = {"P", "R", "N", "D"};

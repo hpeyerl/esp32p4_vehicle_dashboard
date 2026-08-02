@@ -264,7 +264,7 @@ int main(int argc, char **argv)
         // Re-sync regenmax each time the STATUS screen is opened, so a value
         // changed out-of-band (e.g. via the Zombie's HTTP port) shows up.
         dash_screen_t scr = dashboard_ui_get_screen();
-        if (scr == DASH_SCREEN_STATUS && prev_screen != DASH_SCREEN_STATUS) {
+        if (scr == DASH_SCREEN_VCU && prev_screen != DASH_SCREEN_VCU) {
             regen_readback_done = false;
             regen_req_t0 = 0;
         }
