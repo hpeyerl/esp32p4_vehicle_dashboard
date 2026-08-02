@@ -268,7 +268,7 @@ static void update_needle(Meter *m, float pct)
 // ── Screen management ────────────────────────────────────────
 static lv_obj_t    *s_scr_home     = NULL;
 static lv_obj_t    *s_scr_settings = NULL;
-static lv_obj_t    *s_scr_status   = NULL;
+static lv_obj_t    *s_scr_vcu   = NULL;
 static dash_screen_t s_cur_screen  = DASH_SCREEN_HOME;
 static lv_display_t *s_disp        = NULL;
 static volatile dash_screen_t s_pending_screen    = DASH_SCREEN_HOME;
@@ -692,8 +692,8 @@ void dashboard_ui_create(lv_display_t *disp)
 }
 // Forward declarations for screen helpers
 static void prv_ensure_settings_screen(void);
-static void prv_ensure_status_screen(void);
-static void prv_update_status(const DashData *d);
+static void prv_ensure_vcu_screen(void);
+static void prv_update_vcu(const DashData *d);
 static void prv_add_arrow_nav(lv_obj_t *screen);
 #ifdef BMS_HTTP
 static lv_obj_t *s_scr_bms = NULL;
@@ -715,9 +715,9 @@ void dashboard_ui_update(const DashData *d)
                 prv_ensure_settings_screen();
                 lv_screen_load(s_scr_settings);
                 break;
-            case DASH_SCREEN_STATUS:
-                prv_ensure_status_screen();
-                lv_screen_load(s_scr_status);
+            case DASH_SCREEN_VCU:
+                prv_ensure_vcu_screen();
+                lv_screen_load(s_scr_vcu);
                 break;
 #ifdef BMS_HTTP
             case DASH_SCREEN_BMS:
@@ -996,7 +996,7 @@ void dashboard_ui_update(const DashData *d)
     }
 
     // ── Status screen live values (cheap; no-ops until that screen is built) ─
-    prv_update_status(d);
+    prv_update_vcu(d);
 #ifdef BMS_HTTP
     prv_update_bms();   // no-op until BMS screen built
 #endif
@@ -1014,10 +1014,10 @@ static void prv_nav_arrow_cb(lv_event_t *e)
     int dir = (int)(intptr_t)lv_event_get_user_data(e);
     if (dir == 0) { dashboard_ui_set_screen(DASH_SCREEN_HOME); return; }  // 🏠
 #ifdef BMS_HTTP
-    static const dash_screen_t order[] = { DASH_SCREEN_HOME, DASH_SCREEN_STATUS,
+    static const dash_screen_t order[] = { DASH_SCREEN_HOME, DASH_SCREEN_VCU,
                                            DASH_SCREEN_BMS, DASH_SCREEN_SETTINGS };
 #else
-    static const dash_screen_t order[] = { DASH_SCREEN_HOME, DASH_SCREEN_STATUS,
+    static const dash_screen_t order[] = { DASH_SCREEN_HOME, DASH_SCREEN_VCU,
                                            DASH_SCREEN_SETTINGS };
 #endif
     const int n = (int)(sizeof(order) / sizeof(order[0]));
@@ -1097,15 +1097,64 @@ static const char *st_name[ST_N] = {
     "TRIP", "CAN LOAD" };
 static lv_obj_t *s_st_val[ST_N];
 
-static void prv_ensure_status_screen(void)
-{
-    if (s_scr_status) return;
-    s_scr_status = lv_obj_create(NULL);
-    lv_obj_set_style_bg_color(s_scr_status, CLR_BG, 0);
-    lv_obj_set_style_bg_opa(s_scr_status, LV_OPA_COVER, 0);
-    lv_obj_clear_flag(s_scr_status, LV_OBJ_FLAG_SCROLLABLE);
+// ── Regen limit slider (guarded live-tune of ZombieVerter regenmax #61) ──────
+// Regen is the truck's PRIMARY decel right now (no service brakes yet), so this
+// widget is deliberately guarded: a FLOOR so you can't weaken braking past
+// -10%, and it applies ONLY on finger-release (not during drag). Park-test only.
+#define REGEN_PARAM_ID   61        // ZombieVerter "regenmax"
+#define REGEN_MAG_MIN    10        // % floor: always at least -10% regen
+#define REGEN_MAG_MAX    35        // % ceiling of regen magnitude
+#define REGEN_MAG_DEFAULT 20       // slider start position (not applied until release)
+static lv_obj_t *s_regen_slider = NULL;
+static lv_obj_t *s_regen_lbl    = NULL;
+static int  s_regen_current_mag = REGEN_MAG_DEFAULT;  // magnitude to show; from VCU once read
+static bool s_regen_have_current = false;             // true once the VCU has reported a value
 
-    lv_obj_t *grid = lv_obj_create(s_scr_status);
+// While dragging: update the readout only — do NOT touch the VCU.
+static void prv_regen_changed_cb(lv_event_t *e)
+{
+    (void)e;
+    int mag = lv_slider_get_value(s_regen_slider);
+    lv_label_set_text_fmt(s_regen_lbl, "REGEN LIMIT  -%d%%", mag);
+    lv_obj_set_style_text_color(s_regen_lbl, CLR_TEXT_BRIGHT, 0);
+}
+
+// On release: commit the (negative) magnitude to regenmax and flag it applied.
+static void prv_regen_released_cb(lv_event_t *e)
+{
+    (void)e;
+    int mag = lv_slider_get_value(s_regen_slider);
+    bool ok = dashboard_vcu_set_param(REGEN_PARAM_ID, -(float)mag);
+    lv_label_set_text_fmt(s_regen_lbl, ok ? "REGEN  -%d%%  " LV_SYMBOL_OK
+                                          : "REGEN  -%d%%  (no VCU)", mag);
+    lv_obj_set_style_text_color(s_regen_lbl, ok ? CLR_GREEN : CLR_AMBER, 0);
+}
+
+// Platform → UI: the VCU's current regenmax. Boots the slider at the real value;
+// won't yank the knob out from under a finger that's mid-drag.
+extern "C" void dashboard_ui_set_regen_current(float pct)
+{
+    int mag = (int)lroundf(-pct);                 // regenmax is negative → magnitude
+    if (mag < REGEN_MAG_MIN) mag = REGEN_MAG_MIN;
+    if (mag > REGEN_MAG_MAX) mag = REGEN_MAG_MAX;
+    s_regen_current_mag  = mag;
+    s_regen_have_current = true;
+    if (!s_regen_slider) return;                  // not built yet → applied on build
+    if (lv_obj_has_state(s_regen_slider, LV_STATE_PRESSED)) return;  // don't fight a drag
+    lv_slider_set_value(s_regen_slider, mag, LV_ANIM_OFF);
+    lv_label_set_text_fmt(s_regen_lbl, "REGEN LIMIT  -%d%%", mag);
+    lv_obj_set_style_text_color(s_regen_lbl, CLR_TEXT_BRIGHT, 0);
+}
+
+static void prv_ensure_vcu_screen(void)
+{
+    if (s_scr_vcu) return;
+    s_scr_vcu = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(s_scr_vcu, CLR_BG, 0);
+    lv_obj_set_style_bg_opa(s_scr_vcu, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(s_scr_vcu, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *grid = lv_obj_create(s_scr_vcu);
     lv_obj_set_size(grid, LCD_H_RES - 12 - NAV_SAFE_RIGHT, LCD_V_RES - NAV_SAFE_TOP - 12);
     lv_obj_align(grid, LV_ALIGN_TOP_LEFT, 12, NAV_SAFE_TOP);
     lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
@@ -1138,11 +1187,57 @@ static void prv_ensure_status_screen(void)
         lv_obj_align(vl, LV_ALIGN_BOTTOM_LEFT, 0, 0);
         s_st_val[i] = vl;
     }
-    prv_add_home_button(s_scr_status);
-    prv_add_arrow_nav(s_scr_status);
+
+    // ── Regen limit strip: lower band, clear of the right-middle nav cluster ──
+    lv_obj_t *rc = lv_obj_create(s_scr_vcu);
+    lv_obj_set_size(rc, LCD_H_RES - NAV_SAFE_RIGHT - 24, 96);
+    lv_obj_align(rc, LV_ALIGN_BOTTOM_LEFT, 12, -12);
+    lv_obj_set_style_bg_color(rc, CLR_PANEL, 0);
+    lv_obj_set_style_bg_opa(rc, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(rc, CLR_BORDER, 0);
+    lv_obj_set_style_border_width(rc, 1, 0);
+    lv_obj_set_style_radius(rc, 8, 0);
+    lv_obj_set_style_pad_all(rc, 14, 0);
+    lv_obj_clear_flag(rc, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(rc, LV_OBJ_FLAG_CLICKABLE);   // absorb taps so a near-miss doesn't nav home
+
+    // Start at the VCU's real regenmax if we've read it back; else a safe default
+    // (shown greyed with a "?" so it's obvious it isn't the confirmed live value).
+    int start_mag = s_regen_have_current ? s_regen_current_mag : REGEN_MAG_DEFAULT;
+
+    s_regen_lbl = lv_label_create(rc);
+    if (s_regen_have_current)
+        lv_label_set_text_fmt(s_regen_lbl, "REGEN LIMIT  -%d%%", start_mag);
+    else
+        lv_label_set_text_fmt(s_regen_lbl, "REGEN LIMIT  -%d%%  ?", start_mag);
+    lv_obj_set_style_text_color(s_regen_lbl,
+                                s_regen_have_current ? CLR_TEXT_BRIGHT : CLR_TEXT_MID, 0);
+    lv_obj_set_style_text_font(s_regen_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_align(s_regen_lbl, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    s_regen_slider = lv_slider_create(rc);
+    // -68 (not -28): extra inset so the knob, which bulges 14px past the bar,
+    // isn't clipped by rc's right edge at the full-right (max) position.
+    lv_obj_set_width(s_regen_slider, LCD_H_RES - NAV_SAFE_RIGHT - 24 - 68);
+    lv_obj_set_height(s_regen_slider, 28);                 // fat bar for a fingertip
+    lv_obj_align(s_regen_slider, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_slider_set_range(s_regen_slider, REGEN_MAG_MIN, REGEN_MAG_MAX);  // magnitude; floor guards weak end
+    lv_slider_set_value(s_regen_slider, start_mag, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(s_regen_slider, CLR_BORDER, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(s_regen_slider, CLR_GREEN, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(s_regen_slider, CLR_GREEN, LV_PART_KNOB);
+    lv_obj_set_style_pad_all(s_regen_slider, 14, LV_PART_KNOB);  // knob bulges past the bar
+    lv_obj_set_ext_click_area(s_regen_slider, 22);        // vertical near-misses still grab it
+    lv_obj_add_event_cb(s_regen_slider, prv_regen_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_event_cb(s_regen_slider, prv_regen_released_cb, LV_EVENT_RELEASED, NULL);
+
+    // NOTE: no prv_add_home_button() here — that makes the WHOLE screen a
+    // tap-to-home target, which steals taps meant for the slider. This screen is
+    // now interactive; home is still reachable via the 🏠 in the arrow cluster.
+    prv_add_arrow_nav(s_scr_vcu);
 }
 
-static void prv_update_status(const DashData *d)
+static void prv_update_vcu(const DashData *d)
 {
     if (!s_st_val[0]) return;   // status screen not built yet
     static const char *gnm[] = {"P", "R", "N", "D"};

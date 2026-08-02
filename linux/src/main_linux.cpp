@@ -83,6 +83,58 @@ static int open_can_socket(const char *iface)
     return s;
 }
 
+// CAN TX socket, set once the RX socket is bound (SocketCAN raw is bidirectional).
+// -1 until then / in SIM mode, in which case a param write is a no-op + log.
+static int s_can_tx_fd = -1;
+
+// Platform hook the shared UI calls on regen-slider release. Sends an expedited
+// SDO download (mirrors src/sdo_manager.c prv_send_frame): CAN 0x603,
+// cmd 0x23, index 0x2100|(id>>8), subindex id&0xFF, value x32 little-endian.
+extern "C" bool dashboard_vcu_set_param(uint16_t param_id, float value)
+{
+    int32_t raw = (int32_t)(value * 32.0f);
+    if (s_can_tx_fd < 0) {
+        printf("VCU set param %u = %.1f (raw %d): no CAN — not sent\n",
+               param_id, value, raw);
+        return false;
+    }
+    struct can_frame fr;
+    memset(&fr, 0, sizeof fr);
+    fr.can_id  = 0x603;                       // SDO_TX_ID (standard 11-bit)
+    fr.can_dlc = 8;
+    uint16_t index = 0x2100 | (param_id >> 8);
+    fr.data[0] = 0x23;                        // SDO_CMD_WRITE (expedited, 4 bytes)
+    fr.data[1] = (uint8_t)(index & 0xFF);
+    fr.data[2] = (uint8_t)(index >> 8);
+    fr.data[3] = (uint8_t)(param_id & 0xFF);
+    fr.data[4] = (uint8_t)( raw        & 0xFF);
+    fr.data[5] = (uint8_t)((raw >>  8) & 0xFF);
+    fr.data[6] = (uint8_t)((raw >> 16) & 0xFF);
+    fr.data[7] = (uint8_t)((raw >> 24) & 0xFF);
+    ssize_t n = write(s_can_tx_fd, &fr, sizeof fr);
+    bool ok = (n == (ssize_t)sizeof fr);
+    printf("VCU set param %u = %.1f (raw %d): %s\n",
+           param_id, value, raw, ok ? "sent 0x603" : "TX FAIL");
+    return ok;
+}
+
+// Send an SDO expedited-upload (read) request for `param_id` (TX 0x603,
+// cmd 0x40). The VCU replies on 0x583, decoded in the RX drain below.
+static bool vcu_send_sdo_read(uint16_t param_id)
+{
+    if (s_can_tx_fd < 0) return false;
+    struct can_frame fr;
+    memset(&fr, 0, sizeof fr);
+    fr.can_id  = 0x603;
+    fr.can_dlc = 8;
+    uint16_t index = 0x2100 | (param_id >> 8);
+    fr.data[0] = 0x40;                        // SDO_CMD_READ (initiate upload)
+    fr.data[1] = (uint8_t)(index & 0xFF);
+    fr.data[2] = (uint8_t)(index >> 8);
+    fr.data[3] = (uint8_t)(param_id & 0xFF);
+    return write(s_can_tx_fd, &fr, sizeof fr) == (ssize_t)sizeof fr;
+}
+
 // LVGL tick source: milliseconds from a monotonic clock.
 static uint32_t millis_cb(void)
 {
@@ -147,6 +199,7 @@ int main(int argc, char **argv)
     if (!can_iface) can_iface = "can0";
     int can_fd = open_can_socket(can_iface);
     const bool use_can = (can_fd >= 0);
+    s_can_tx_fd = can_fd;   // enable SDO param writes (regen slider) over the same socket
     printf("data source: %s\n", use_can ? can_iface : "SIM (no CAN — sine-wave demo)");
 
     // g_dash is defined + initialized in can_parser.cpp (dir_confirmed=INT8_MIN);
@@ -154,12 +207,29 @@ int main(int argc, char **argv)
     float t = 0.0f;
     uint64_t canload_bits = 0;               // CAN bus-load accumulator
     uint32_t canload_t0   = millis_cb();
+    const uint16_t REGEN_PARAM = 61;         // ZombieVerter regenmax (see dashboard_ui.cpp)
+    bool     regen_readback_done = false;    // set once the VCU answers our read
+    uint32_t regen_req_t0 = 0;               // last read-request time (0 = never)
+    dash_screen_t prev_screen = DASH_SCREEN_HOME;   // for STATUS-entry edge detect
     for (;;) {
         if (use_can) {
             // drain all pending frames -> the shared parser updates g_dash
             struct can_frame fr;
             while (read(can_fd, &fr, sizeof fr) == (ssize_t)sizeof fr) {
-                parse_can_frame(fr.can_id & CAN_EFF_MASK, fr.data, millis_cb());
+                uint32_t id = fr.can_id & CAN_EFF_MASK;
+                parse_can_frame(id, fr.data, millis_cb());
+                // SDO response (0x583): pick off a regenmax read reply for the slider
+                if (id == 0x583) {
+                    uint8_t  cmd   = fr.data[0];
+                    uint16_t index = (uint16_t)(fr.data[1] | (fr.data[2] << 8));
+                    uint16_t pid   = (uint16_t)(((index & 0xFF) << 8) | fr.data[3]);
+                    if ((cmd == 0x43 || cmd == 0x4B) && pid == REGEN_PARAM) {   // read reply
+                        int32_t raw = (int32_t)(fr.data[4] | (fr.data[5] << 8) |
+                                                (fr.data[6] << 16) | (fr.data[7] << 24));
+                        dashboard_ui_set_regen_current(raw / 32.0f);
+                        regen_readback_done = true;
+                    }
+                }
                 // bus-load tally: overhead + data bits, +~15% avg bit-stuffing
                 int ov = (fr.can_id & CAN_EFF_FLAG) ? 67 : 47;
                 canload_bits += (uint64_t)((ov + 8 * fr.can_dlc) * 1.15f);
@@ -191,12 +261,31 @@ int main(int argc, char **argv)
             canload_t0   = cl_now;
         }
 
+        // Re-sync regenmax each time the STATUS screen is opened, so a value
+        // changed out-of-band (e.g. via the Zombie's HTTP port) shows up.
+        dash_screen_t scr = dashboard_ui_get_screen();
+        if (scr == DASH_SCREEN_VCU && prev_screen != DASH_SCREEN_VCU) {
+            regen_readback_done = false;
+            regen_req_t0 = 0;
+        }
+        prev_screen = scr;
+
+        // Regenmax readback: poll ~1 Hz until the VCU answers, so the slider
+        // shows the real value. Stops once we've heard back (re-armed above).
+        if (use_can && !regen_readback_done) {
+            uint32_t now = millis_cb();
+            if (regen_req_t0 == 0 || now - regen_req_t0 >= 1000) {
+                vcu_send_sdo_read(REGEN_PARAM);
+                regen_req_t0 = now;
+            }
+        }
+
         // let a touched gear button override immediately (UI feedback)
         int8_t req = gear_shifter_current();
         if (req >= 0) g_dash.gear = (uint8_t)req;
 
         // poll the BMW i3 BMS web API (only while the BMS screen is showing)
-        bms_http_poll(millis_cb(), dashboard_ui_get_screen() == DASH_SCREEN_BMS);
+        bms_http_poll(millis_cb(), scr == DASH_SCREEN_BMS);
 
         dashboard_ui_update(&g_dash);
         lv_timer_handler();

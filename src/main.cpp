@@ -68,6 +68,13 @@ static esp_err_t twai_init(void)
     return ESP_OK;
 }
 
+// Platform hook the shared UI calls on regen-slider release (dashboard_ui.h).
+// Routes a VCU param write through the existing SDO manager (high priority).
+extern "C" bool dashboard_vcu_set_param(uint16_t param_id, float value)
+{
+    return sdo_write(param_id, value, true);
+}
+
 static void can_rx_task(void *arg)
 {
     twai_message_t msg;
