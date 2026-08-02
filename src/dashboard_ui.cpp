@@ -1216,7 +1216,9 @@ static void prv_ensure_status_screen(void)
     lv_obj_align(s_regen_lbl, LV_ALIGN_TOP_LEFT, 0, 0);
 
     s_regen_slider = lv_slider_create(rc);
-    lv_obj_set_width(s_regen_slider, LCD_H_RES - NAV_SAFE_RIGHT - 24 - 28);
+    // -68 (not -28): extra inset so the knob, which bulges 14px past the bar,
+    // isn't clipped by rc's right edge at the full-right (max) position.
+    lv_obj_set_width(s_regen_slider, LCD_H_RES - NAV_SAFE_RIGHT - 24 - 68);
     lv_obj_set_height(s_regen_slider, 28);                 // fat bar for a fingertip
     lv_obj_align(s_regen_slider, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_slider_set_range(s_regen_slider, REGEN_MAG_MIN, REGEN_MAG_MAX);  // magnitude; floor guards weak end
