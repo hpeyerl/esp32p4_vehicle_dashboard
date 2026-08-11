@@ -1,0 +1,93 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/*
+ * PRODUCTION CAN overlay — Waveshare 2-CH isolated CAN HAT+ on Radxa CM3 (RK3566).
+ * Two MCP2515s on SPI3, giving SocketCAN can0 + can1. This is the production stack
+ * per HAT_CONTEXT.md rev 4.2 (vs mcp2515-cm3.dtso, which is the single-channel
+ * 12 MHz RS485-CAN HAT used for initial bench validation).
+ *
+ * Per HAT_CONTEXT rev 4.2:
+ *   SPI3: MOSI=hdr19, MISO=hdr21, CLK=hdr23, CS0=hdr24, CS1=hdr36
+ *   INT : CAN_INT0 = hdr15 = GPIO0_C3   (can0, CS0)
+ *         CAN_INT1 = hdr22 = GPIO3_C6   (can1, CS1)
+ *   Crystal: 16 MHz on the 2-CH HAT+ (NOT 12 MHz — that's the RS485-CAN HAT).
+ *   Bus map: can0 = HAT_CAN1 <-> Zombie CAN EXT (X1 27/28, SDO/RPM);
+ *            can1 = HAT_CAN2 <-> Zombie CAN EXT 2 (X1 43/44, vehicle+charger).
+ *            (Confirm the SocketCAN can0/can1 <-> CS0/CS1 ordering on hardware.)
+ *
+ * HAT+ BACK-PAD STRAPPING (confirmed 2026-08-11, silkscreen + Waveshare wiki). The
+ * board SHIPS on SPI1 (pins 35/38/40); re-strap the 7 back pads onto CM3 SPI3:
+ *     SDO -> MISO (pin21)     SDI -> MOSI (pin19)     SCLK -> SCK (pin23)
+ *     CE_0 -> CE0 (pin24)     CE_1 -> D16 (pin36, ALREADY DEFAULT)
+ *     INT0 -> D22 (pin15, ALREADY DEFAULT)            INT_1 -> D25 (pin22)
+ * = 5 pads to move (SDO/SDI/SCLK/CE_0/INT_1); CE_1 + INT0 already correct. Do NOT use
+ * the CS_1 'CE1'/pin-26 option (pin26 = CM3 SARADC). After re-strap, 35/38/40 free ->
+ * DIMMER (pin40) safe. Buzz-verify SCLK->23, MOSI->19, MISO->21, CS0->24, CS1->36.
+ *
+ * The HAT+ also carries a CAT24C32W ID EEPROM on I2C2 (hdr 27/28) — harmless,
+ * Rockchip boot doesn't read RPi HAT EEPROMs; not modelled here.
+ *
+ * NOTE: Radxa ships rk3568-spi3-m0-cs0-mcp2515.dtbo (osc *8 MHz*, INT gpio4, CS0
+ * only). For two channels + 16 MHz + our INT pins it's cleaner to use THIS overlay
+ * than to override the shipped one. Confirm the spi3m0 pinctrl group name against
+ * the base DTS before enabling.
+ */
+/dts-v1/;
+/plugin/;
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+#include <dt-bindings/pinctrl/rockchip.h>
+
+/ {
+	compatible = "radxa,cm3-io", "rockchip,rk3566";
+
+	can_hatplus_osc: can-hatplus-oscillator {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <16000000>;   /* 2-CH isolated CAN HAT+ = 16 MHz */
+	};
+};
+
+&spi3 {
+	status = "okay";
+	/* TODO: pinctrl-0 = <&spi3m0_pins>; (confirm group name in the base DTS) */
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	can0: can@0 {
+		compatible = "microchip,mcp2515";
+		reg = <0>;                                  /* CS0 = hdr24 */
+		spi-max-frequency = <10000000>;
+		clocks = <&can_hatplus_osc>;
+
+		/* CAN_INT0 = hdr15 = GPIO0_C3, active-low, level-triggered */
+		interrupt-parent = <&gpio0>;
+		interrupts = <RK_PC3 IRQ_TYPE_LEVEL_LOW>;
+
+		vdd-supply = <&vcc3v3_sys>;
+		xceiver-supply = <&vcc3v3_sys>;
+	};
+
+	can1: can@1 {
+		compatible = "microchip,mcp2515";
+		reg = <1>;                                  /* CS1 = hdr36 */
+		spi-max-frequency = <10000000>;
+		clocks = <&can_hatplus_osc>;
+
+		/* CAN_INT1 = hdr22 = GPIO3_C6, active-low, level-triggered */
+		interrupt-parent = <&gpio3>;
+		interrupts = <RK_PC6 IRQ_TYPE_LEVEL_LOW>;
+
+		vdd-supply = <&vcc3v3_sys>;
+		xceiver-supply = <&vcc3v3_sys>;
+	};
+};
+
+/*
+ * Bring up after boot (bitrate = the vehicle bus rate; confirm 500k):
+ *   sudo ip link set can0 up type can bitrate 500000
+ *   sudo ip link set can1 up type can bitrate 500000
+ *   candump -tz can0 can1        # (can-utils)
+ * If only one interface appears, buzz the CS1 (hdr36) / INT1 (hdr22) routing and
+ * confirm the pinctrl group actually claims CS1.
+ */
