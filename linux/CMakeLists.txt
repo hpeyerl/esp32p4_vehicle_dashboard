@@ -61,3 +61,7 @@ target_include_directories(dashboard PRIVATE
 
 find_package(Threads REQUIRED)
 target_link_libraries(dashboard PRIVATE lvgl m ${LIBDRM_LIBRARIES} Threads::Threads)
+
+# Strip symbols in Release (the ~142 KB symbol table; the fonts/rodata stay).
+# Cosmetic — the app loads+inits in ~0.1s — but keeps the deployed binary lean.
+target_link_options(dashboard PRIVATE $<$<CONFIG:Release>:-s>)
