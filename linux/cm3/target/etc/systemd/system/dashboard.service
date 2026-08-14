@@ -1,0 +1,12 @@
+[Unit]
+Description=EV Dashboard (LVGL on DSI panel)
+After=ws-panel-power.service
+Wants=ws-panel-power.service
+[Service]
+Type=simple
+ExecStart=/home/hpeyerl/evj55-dashboard/linux/build/dashboard /dev/fb0
+Restart=always
+RestartSec=2
+User=root
+[Install]
+WantedBy=multi-user.target

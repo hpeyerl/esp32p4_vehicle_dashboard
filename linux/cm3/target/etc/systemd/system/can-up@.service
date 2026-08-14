@@ -1,0 +1,13 @@
+[Unit]
+Description=Bring up CAN interface %i at 500 kbit/s
+After=sys-subsystem-net-devices-%i.device
+BindsTo=sys-subsystem-net-devices-%i.device
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/ip link set %i up type can bitrate 500000
+ExecStop=/usr/bin/ip link set %i down
+
+[Install]
+WantedBy=multi-user.target

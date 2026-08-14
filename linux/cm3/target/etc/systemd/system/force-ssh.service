@@ -1,0 +1,9 @@
+[Unit]
+Description=Force SSH enabled (Radxa rsetup leaves it off)
+After=rsetup.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'rm -f /etc/ssh/sshd_not_to_be_run; systemctl unmask ssh.service 2>/dev/null; systemctl enable ssh.service 2>/dev/null; systemctl restart ssh.service'
+[Install]
+WantedBy=multi-user.target
