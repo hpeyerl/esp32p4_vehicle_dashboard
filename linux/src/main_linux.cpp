@@ -198,9 +198,17 @@ int main(int argc, char **argv)
     const char *can_iface = getenv("CAN_IFACE");
     if (!can_iface) can_iface = "can0";
     int can_fd = open_can_socket(can_iface);
-    const bool use_can = (can_fd >= 0);
+    bool use_can = (can_fd >= 0);
     s_can_tx_fd = can_fd;   // enable SDO param writes (regen slider) over the same socket
-    printf("data source: %s\n", use_can ? can_iface : "SIM (no CAN — sine-wave demo)");
+    // SIM sine-wave data is for bench/animation testing ONLY — off by default so a real
+    // vehicle boot never shows fake numbers. Enable with DASH_SIM=1 for demos.
+    const bool sim_enabled = (getenv("DASH_SIM") != NULL);
+    printf("data source: %s\n", use_can ? can_iface
+           : (sim_enabled ? "SIM (sine-wave demo)" : "waiting for CAN (blank until can0 is up)"));
+    // If CAN isn't up yet (the interface is often brought up by systemd AFTER this
+    // process starts — a boot race), keep retrying ~1 Hz and switch over the instant
+    // it appears, instead of being stuck for the whole session.
+    uint32_t can_retry_t0 = millis_cb();
 
     // g_dash is defined + initialized in can_parser.cpp (dir_confirmed=INT8_MIN);
     // do NOT memset it here. In CAN mode parse_can_frame() fills it from frames.
@@ -212,6 +220,19 @@ int main(int argc, char **argv)
     uint32_t regen_req_t0 = 0;               // last read-request time (0 = never)
     dash_screen_t prev_screen = DASH_SCREEN_HOME;   // for STATUS-entry edge detect
     for (;;) {
+        // Not on CAN yet? retry ~1 Hz and switch over as soon as the iface is up.
+        if (!use_can) {
+            uint32_t now = millis_cb();
+            if (now - can_retry_t0 >= 1000) {
+                can_retry_t0 = now;
+                can_fd = open_can_socket(can_iface);
+                if (can_fd >= 0) {
+                    use_can = true;
+                    s_can_tx_fd = can_fd;
+                    printf("data source: switched to %s\n", can_iface);
+                }
+            }
+        }
         if (use_can) {
             // drain all pending frames -> the shared parser updates g_dash
             struct can_frame fr;
@@ -234,7 +255,7 @@ int main(int argc, char **argv)
                 int ov = (fr.can_id & CAN_EFF_FLAG) ? 67 : 47;
                 canload_bits += (uint64_t)((ov + 8 * fr.can_dlc) * 1.15f);
             }
-        } else {
+        } else if (sim_enabled) {
             t += 0.05f;
             g_dash.soc_pct         = 50.0f + 45.0f * sinf(t * 0.3f);
             g_dash.speed           = 60.0f + 50.0f * sinf(t * 0.7f);
