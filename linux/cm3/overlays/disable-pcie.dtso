@@ -1,0 +1,19 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/*
+ * Disable the kernel PCIe controller on Radxa CM3 (RK3566) / CM4IO.
+ *
+ * pcie2x1 = pcie@fe260000 = kernel "3c0000000.pcie" — the CM4IO PCIe 2.0 x1 slot.
+ * Nothing is connected, so the controller spends ~1-2s in link-fail retries every boot
+ * (`rk-pcie 3c0000000.pcie: PCIe Link Fail ... failed to initialize host`) and clutters
+ * dmesg. Disable it to cut that.  (U-Boot ALSO retries PCIe pre-kernel, but that's baked
+ * into U-Boot's built-in FDT and can't be changed here — see the Falcon-mode notes.)
+ *
+ * If a PCIe device (NVMe, PCIe-NIC) is ever fitted to the CM4IO, drop this overlay from
+ * the stack in rebuild-dtb.sh.
+ */
+/dts-v1/;
+/plugin/;
+
+&pcie2x1 {
+	status = "disabled";
+};

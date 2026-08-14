@@ -38,45 +38,67 @@
 #include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/pinctrl/rockchip.h>
 
-/ {
-	compatible = "radxa,cm3-io", "rockchip,rk3566";
-
-	can_hatplus_osc: can-hatplus-oscillator {
-		compatible = "fixed-clock";
-		#clock-cells = <0>;
-		clock-frequency = <16000000>;   /* 2-CH isolated CAN HAT+ = 16 MHz */
-	};
-};
-
+/*
+ * No separate fixed-clock node. We feed the 16 MHz oscillator to each mcp2515 via a
+ * direct `clock-frequency` property instead of a `clocks = <&phandle>` reference.
+ * Rationale: when this overlay is pre-merged into the base DTB with `fdtoverlay`
+ * (because U-Boot's runtime overlay apply fails on this board), the static merge
+ * DROPS a root-targeted fixed-clock fragment but keeps the phandle referencing it —
+ * leaving `clocks = <759>` dangling → mcp251x probe returns -ERANGE (freq=0).
+ * The mcp251x driver takes its clock as OPTIONAL (devm_clk_get_optional) and falls
+ * back to the `clock-frequency` device property, so this is the robust, phandle-free
+ * way to specify the 2-CH HAT+'s 16 MHz crystal. (No root `/` fragment at all now,
+ * which also avoids clobbering the base board root compatible.)
+ */
 &spi3 {
 	status = "okay";
-	/* TODO: pinctrl-0 = <&spi3m0_pins>; (confirm group name in the base DTS) */
+	/*
+	 * Pinctrl group names confirmed against the base DTS
+	 * (rk3566-radxa-cm3-rpi-cm4-io.dtb): spi3m0_pins / spi3m0_pins_hs = CLK+MOSI+MISO,
+	 * spi3m0_cs0 = hdr24, spi3m0_cs1 = hdr36. Listing BOTH cs0 and cs1 is what claims
+	 * the CS1 pad for the second MCP2515. Mirrors the shipped single-ch mcp2515 overlay
+	 * (which used only cs0) with cs1 added.
+	 */
+	pinctrl-names = "default", "high_speed";
+	pinctrl-0 = <&spi3m0_cs0 &spi3m0_cs1 &spi3m0_pins>;
+	pinctrl-1 = <&spi3m0_cs0 &spi3m0_cs1 &spi3m0_pins_hs>;
 	#address-cells = <1>;
 	#size-cells = <0>;
 
-	can0: can@0 {
+	/*
+	 * NODE ORDER IS DELIBERATELY CS1-THEN-CS0.
+	 * SocketCAN's canN index is assigned in SPI-child probe order = DT node OFFSET
+	 * order. `fdtoverlay` (our pre-merge step) REVERSES the order in which it adds
+	 * these nodes to the target, so declaring can@1 first here yields can@0 first in
+	 * the merged DTB → probes first → gets `can0`. Net result (verified at merge time):
+	 *   can0 = spi3.0 = CS0 (hdr24) = Waveshare CAN0 = Zombie CAN1
+	 *   can1 = spi3.1 = CS1 (hdr36) = Waveshare CAN1 = Zombie CAN2
+	 * If a future fdtoverlay changes its add-order, the merge-time check catches it
+	 * (decompile merged dtb, confirm can@0 precedes can@1) — reboot only after that.
+	 */
+	can1: can@1 {
 		compatible = "microchip,mcp2515";
-		reg = <0>;                                  /* CS0 = hdr24 */
+		reg = <1>;                                  /* CS1 = hdr36 */
 		spi-max-frequency = <10000000>;
-		clocks = <&can_hatplus_osc>;
+		clock-frequency = <16000000>;               /* 2-CH HAT+ crystal = 16 MHz */
 
-		/* CAN_INT0 = hdr15 = GPIO0_C3, active-low, level-triggered */
-		interrupt-parent = <&gpio0>;
-		interrupts = <RK_PC3 IRQ_TYPE_LEVEL_LOW>;
+		/* CAN_INT1 = hdr22 = GPIO3_C6, active-low, level-triggered */
+		interrupt-parent = <&gpio3>;
+		interrupts = <RK_PC6 IRQ_TYPE_LEVEL_LOW>;
 
 		vdd-supply = <&vcc3v3_sys>;
 		xceiver-supply = <&vcc3v3_sys>;
 	};
 
-	can1: can@1 {
+	can0: can@0 {
 		compatible = "microchip,mcp2515";
-		reg = <1>;                                  /* CS1 = hdr36 */
+		reg = <0>;                                  /* CS0 = hdr24 */
 		spi-max-frequency = <10000000>;
-		clocks = <&can_hatplus_osc>;
+		clock-frequency = <16000000>;               /* 2-CH HAT+ crystal = 16 MHz */
 
-		/* CAN_INT1 = hdr22 = GPIO3_C6, active-low, level-triggered */
-		interrupt-parent = <&gpio3>;
-		interrupts = <RK_PC6 IRQ_TYPE_LEVEL_LOW>;
+		/* CAN_INT0 = hdr15 = GPIO0_C3, active-low, level-triggered */
+		interrupt-parent = <&gpio0>;
+		interrupts = <RK_PC3 IRQ_TYPE_LEVEL_LOW>;
 
 		vdd-supply = <&vcc3v3_sys>;
 		xceiver-supply = <&vcc3v3_sys>;

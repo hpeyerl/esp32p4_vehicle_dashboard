@@ -1,0 +1,12 @@
+[Unit]
+Description=Panel backlight on once dashboard is rendering
+After=dashboard.service
+Requires=dashboard.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/ws-backlight-on.sh
+
+[Install]
+WantedBy=multi-user.target
