@@ -1,0 +1,7 @@
+[Unit]
+Description=Wi-Fi self-heal (flaky brcmfmac SDIO wifi)
+After=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/wifi-watchdog.sh
