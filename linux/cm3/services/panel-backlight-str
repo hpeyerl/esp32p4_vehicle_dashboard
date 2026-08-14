@@ -1,0 +1,25 @@
+#!/bin/sh
+# systemd-sleep hook: panel backlight OFF during STR, back ON (+ DSI re-init) on resume.
+# The panel MCU@0x45 sits on an always-on rail and retains its GPIO/PWM state across
+# suspend, so without this the backlight stays lit while the SoC sleeps (wastes power,
+# and a lit screen doesn't read as "asleep"). MCU regs: 0x95=GPIO lo byte
+# (AVDD=b0, LCD_RESET=b1, BL_EN=b2, IOVCC=b4), 0x96=backlight PWM.
+# systemd runs this as: <script> pre|post <mode>.
+case "$1/$2" in
+  pre/*)
+    # backlight off; keep AVDD/IOVCC/reset-released so the panel rails stay up (0x13)
+    i2cset -y 0 0x45 0x96 0x00 2>/dev/null || true
+    i2cset -y 0 0x45 0x95 0x13 2>/dev/null || true
+    ;;
+  post/*)
+    # DSI controller may lose state in center-power-down; nudge a re-init, then backlight on
+    if [ -e /sys/class/graphics/fb0/blank ]; then
+      echo 1 > /sys/class/graphics/fb0/blank 2>/dev/null || true
+      sleep 0.2
+      echo 0 > /sys/class/graphics/fb0/blank 2>/dev/null || true
+    fi
+    i2cset -y 0 0x45 0x95 0x17 2>/dev/null || true   # +BL_EN
+    i2cset -y 0 0x45 0x96 0xff 2>/dev/null || true   # PWM full
+    ;;
+esac
+exit 0
