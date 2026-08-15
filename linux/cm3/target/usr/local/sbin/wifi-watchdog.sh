@@ -11,6 +11,11 @@ if nmcli -t -f DEVICE,STATE device status 2>/dev/null | grep -q "^wlan0:connecte
 fi
 
 logger -t wifi-watchdog "wlan0 not connected — attempting recovery"
+# NM silently ignores the PSK if the profile is group/world-readable (secrets leak
+# guard). An unclean power-off can mangle the mode -> no secret -> no association.
+# Re-assert 0600 root:root before trying to bring the connection up.
+chmod 600 /etc/NetworkManager/system-connections/* 2>/dev/null
+chown root:root /etc/NetworkManager/system-connections/* 2>/dev/null
 rfkill unblock wifi 2>/dev/null
 nmcli radio wifi on 2>/dev/null
 
