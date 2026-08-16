@@ -9,14 +9,16 @@
  * (Earlier this was on phys pin 13 = GPIO0_B7 = BCM27/"D27" — wrong pin; the
  * schematic's "GPIO13" is BCM numbering = physical pin 33.)
  *
- * BENCH-TEST wiring: momentary button (or alligator lead) from header pin 33 to GND.
- * Idles HIGH via the internal pull-up below (RK_PC6 + pcfg_pull_up); pulling it LOW
- * -> KEY_WAKEUP. KEY_WAKEUP (143) rather than KEY_POWER so a press while awake is NOT
- * treated by logind as a shutdown request — it only resumes from STR.
- * NOTE (production IGN_SENSE): if pin 33 becomes the ignition-sense input (high=ign-on),
- * flip to active-HIGH + pull-DOWN so the wake fires on the ign-ON rising edge, and add a
- * userspace watcher that runs `systemctl suspend` on the ign-OFF edge. Measure the real
- * level through the HAT Block A front-end first (it may invert).
+ * IGN_SENSE wiring (per HAT schematic, KiCad chat 2026-08-16): pin 33 goes HIGH when
+ * ignition is sensed, LOW when off. So: ACTIVE_HIGH + internal pull-DOWN (idles low =
+ * stays asleep / fail-safe if the line floats when ign is off). The active-high flag is
+ * what sets the wake trigger to the ign-ON (rising) edge — gpio-keys infers it. KEY_WAKEUP
+ * (143) not KEY_POWER so a press while awake isn't treated by logind as shutdown.
+ * OPEN ITEMS: (a) this dtbo does the WAKE half only — suspend on ign-OFF needs a userspace
+ * watcher (`systemctl suspend` on the falling edge), level-aware at boot [[project_cm3_suspend]].
+ * (b) Only pin 13/GPIO0_B7 is PROVEN to wake from deep STR; pin 33/GPIO0_C6 is UNVERIFIED —
+ * confirm it actually wakes before trusting this. (c) Verify the real level through the HAT
+ * Block A front-end (it may invert); pull-down is harmless if the HAT actively drives low.
  *
  * Stack this with the CAN + DSI overlays when pre-merging into the base DTB:
  *   fdtoverlay -i base.orig -o both.dtb mcp2515-2ch-hatplus.dtbo \
@@ -35,7 +37,7 @@
 		wake-button {
 			label = "wake";
 			linux,code = <143>;		/* KEY_WAKEUP */
-			gpios = <&gpio0 22 1>;		/* GPIO0_C6 (hdr pin 33), GPIO_ACTIVE_LOW */
+			gpios = <&gpio0 22 0>;		/* GPIO0_C6 (hdr pin 33), GPIO_ACTIVE_HIGH (IGN_SENSE high=on) */
 			wakeup-source;
 			debounce-interval = <50>;
 		};
@@ -45,9 +47,9 @@
 &pinctrl {
 	gpio-keys-wake {
 		wake_btn_pin: wake-btn-pin {
-			/* bank 0, RK_PC6 (=22), func GPIO (0), internal pull-up.
-			   pcfg_pull_up is a base-DTB symbol (resolved by fdtoverlay). */
-			rockchip,pins = <0 22 0 &pcfg_pull_up>;
+			/* bank 0, RK_PC6 (=22), func GPIO (0), internal pull-DOWN (idle low = asleep).
+			   pcfg_pull_down is a base-DTB symbol (resolved by fdtoverlay). */
+			rockchip,pins = <0 22 0 &pcfg_pull_down>;
 		};
 	};
 };
