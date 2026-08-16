@@ -54,7 +54,8 @@ static const char *find_touch_device(void)
         FILE *f = fopen(namep, "r");
         if (!f) continue;
         if (fgets(name, sizeof name, f) &&
-            (strstr(name, "Goodix") || strstr(name, "Touch") || strstr(name, "touch"))) {
+            (strstr(name, "Goodix") || strstr(name, "goodix") ||   /* Rockchip BSP names it "goodix-ts" */
+             strstr(name, "Touch")  || strstr(name, "touch"))) {
             snprintf(path, sizeof path, "/dev/input/%s", e->d_name);
             found = path;
         }
