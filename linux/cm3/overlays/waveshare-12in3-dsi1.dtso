@@ -100,7 +100,14 @@
 	};
 };
 
-/* Panel MCU (power/reset/backlight) + GT911 touch, both on i2c0. */
+/*
+ * Panel MCU (power/reset/backlight) on i2c0.
+ * GT911 touch deliberately NOT bound to a kernel driver: the Rockchip BSP Goodix-TS
+ * driver hard-requires touch-INT + reset GPIOs that this CM4IO DISP1 connector doesn't
+ * expose (they're MCU-mediated) -> it logs "invalid GPIO -2", its i2c reads fail (-6),
+ * and it loops "Process reset" — spamming i2c-0 (shared with the MCU). Backed out
+ * 2026-08-17. Touch, if wanted later, = a userspace GT911 reader in the app over i2c.
+ */
 &i2c0 {
 	status = "okay";
 	pinctrl-names = "default";
@@ -111,28 +118,6 @@
 	rockpi-mcu@45 {
 		compatible = "rockpi_mcu";
 		reg = <0x45>;
-	};
-
-	/*
-	 * GT911 (GT9271) touch @0x5d, confirmed alive on i2c-0. Reset is released by the
-	 * panel MCU (ws-panel-power.sh, MCU bit9) so no reset-gpios here. The DISP1
-	 * connector's touch-INT gpio routing is unknown, and Radxa's own shipped touch
-	 * overlays specify no irq (the BSP Goodix-TS driver handles it) — so start
-	 * minimal. If it binds (0x5d -> UU) but reports no touches, add irq-gpios/interrupts.
-	 */
-	gt911@5d {
-		/* Rockchip BSP "Goodix-TS" (gt9xx) driver — needs max-x/max-y/tp-size (it
-		   errors "no max-x defined" without them). tp-size=9271 = our GT9271.
-		   max-x/max-y = panel-native 720x1920 (portrait; UI is rotated 270 in fbdev).
-		   No touch-gpio/reset-gpio: the CM4IO DISP1 connector's touch INT/reset are
-		   MCU-mediated (reset released by ws-panel-power) — the shipped CM3 touch
-		   overlays likewise specify none. If the driver hard-needs touch-gpio, that's
-		   the next thing to solve. */
-		compatible = "goodix,gt9xx";
-		reg = <0x5d>;
-		max-x = <720>;
-		max-y = <1920>;
-		tp-size = <9271>;
 	};
 };
 
