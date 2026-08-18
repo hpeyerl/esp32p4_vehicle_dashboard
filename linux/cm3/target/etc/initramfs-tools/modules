@@ -1,0 +1,11 @@
+# List of modules that you want to include in your initramfs.
+# They will be loaded at boot time in the order below.
+#
+# Syntax:  module_name [args ...]
+#
+# You must run update-initramfs(8) to effect this change.
+
+# Read-only root overlay (scripts/init-bottom/overlayroot). CONFIG_OVERLAY_FS=m
+# on this BSP, so the module must be pulled into the initramfs AND loaded
+# before init-bottom runs -- listing it here does both.
+overlay

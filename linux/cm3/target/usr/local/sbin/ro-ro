@@ -1,0 +1,14 @@
+#!/bin/sh
+# ro-ro -- flip the eMMC root back to read-only after a `ro-rw` edit session.
+# Reboot afterwards so the change is picked up under a fresh RAM overlay.
+
+set -e
+if mountpoint -q /mnt/ro; then
+    sync
+    mount -o remount,ro /mnt/ro
+    echo "eMMC root is READ-ONLY again at /mnt/ro. Reboot to apply your change."
+else
+    sync
+    mount -o remount,ro /
+    echo "overlay not active -- remounted / read-only directly."
+fi

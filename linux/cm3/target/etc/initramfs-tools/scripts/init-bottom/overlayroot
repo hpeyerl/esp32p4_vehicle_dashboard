@@ -1,0 +1,111 @@
+#!/bin/sh
+#
+# init-bottom/overlayroot -- read-only root via a tmpfs overlay
+#
+# Stacks a RAM (tmpfs) overlay on top of a read-only real rootfs, so ALL
+# runtime writes land in RAM and the eMMC is only ever READ. This makes the
+# box immune to filesystem corruption from the vehicle's frequent unclean
+# power-cuts -- yanking +12V mid-write is exactly how this eMMC got corrupted
+# (superblock/feature mismatch, missing /sbin/init -> panic) twice before.
+#
+# --- Design notes (why it looks like this) ---
+#  * klibc initramfs ONLY: no `trap`, no `local`, no `[[ ]]`, no bash-isms.
+#    The Debian `overlayroot` package paniced this box because its init-bottom
+#    script used `trap ... EXIT`, which the klibc shell rejects.
+#  * FAILS SAFE: every step is guarded; on ANY error it restores the original
+#    read-WRITE root at ${rootmnt} and exits 0, so a bug degrades to an
+#    ordinary rw boot (recoverable over ssh) rather than an unbootable panic.
+#  * klibc `mount` quirks (verified on-box): -o options MUST precede the
+#    device+dir positionals, and overlay's upperdir+workdir MUST live on the
+#    same filesystem (one tmpfs, two subdirs).
+#
+# --- Escape hatch ---
+#    Add `overlayroot=off` to the kernel cmdline to skip the overlay and boot
+#    a normal read-write root (for maintenance/provisioning).
+#
+# --- Persisting a change to the real rootfs while this is active ---
+#    sudo ro-rw          # remount the eMMC root read-write  (/mnt/ro)
+#    ...make your edits under /mnt/ro (or just normally; see ro-rw)...
+#    sudo ro-ro          # flip it back read-only
+#    (then reboot to drop the RAM overlay and boot clean off the change)
+
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in
+    prereqs) prereqs; exit 0 ;;
+esac
+
+log() { echo "overlayroot: $*" > /dev/console 2>/dev/null; }
+
+# Escape hatch: honour overlayroot=off on the kernel cmdline.
+for _arg in $(cat /proc/cmdline); do
+    case "$_arg" in
+        overlayroot=off|overlayroot=disabled)
+            log "disabled via cmdline -- plain read-write boot"
+            exit 0 ;;
+    esac
+done
+
+# overlay fs must be available (module is pulled in via
+# /etc/initramfs-tools/modules and loaded before init-bottom runs).
+modprobe overlay 2>/dev/null
+if ! grep -qw overlay /proc/filesystems; then
+    log "overlay filesystem unavailable -- plain read-write boot"
+    exit 0
+fi
+
+RO=/ro_lower       # where the real rootfs gets parked, read-only
+RW=/rw_overlay     # tmpfs holding the writable upper + work dirs
+mkdir -p "$RO" "$RW" || { log "mkdir failed -- read-write boot"; exit 0; }
+
+# Capture the underlying root device BEFORE moving the mount -- klibc `mount`
+# needs an explicit device to remount read-only (the one-arg form is rejected).
+_dev=$(awk -v m="${rootmnt}" '$2==m {print $1; exit}' /proc/mounts)
+
+# 1. Park the real (currently rw) root at $RO.
+if ! mount -o move "${rootmnt}" "$RO"; then
+    log "move ${rootmnt} -> $RO failed -- read-write boot"
+    exit 0
+fi
+
+# Force the eMMC block mount READ-ONLY so it is never written/journalled again
+# -> genuinely power-cut safe. Best-effort: the overlay protects writes even if
+# this remount does not take, so only warn on failure.
+if [ -n "$_dev" ]; then
+    mount -o remount,ro "$_dev" "$RO" 2>/dev/null \
+        || log "WARNING: could not remount eMMC read-only ($_dev); overlay still active"
+else
+    log "WARNING: root device not found in /proc/mounts; eMMC left read-write"
+fi
+
+# From here the real root is NOT at ${rootmnt}. On ANY failure below we must
+# put it back so run-init still finds a valid root. revert() does exactly that.
+revert() {
+    log "$1 -- reverting to plain read-write root"
+    umount "$RW" 2>/dev/null
+    mount -o move "$RO" "${rootmnt}" 2>/dev/null
+    # step 1 left it read-only; restore rw (klibc remount needs the device).
+    [ -n "$_dev" ] && mount -o remount,rw "$_dev" "${rootmnt}" 2>/dev/null
+    exit 0
+}
+
+# 2. tmpfs for the writable layer (upper + work MUST share one filesystem).
+if ! mount -t tmpfs -o mode=0755,size=512M overlay-rw "$RW"; then
+    revert "tmpfs for upper layer failed"
+fi
+mkdir -p "$RW/upper" "$RW/work" || revert "mkdir upper/work failed"
+
+# 3. Assemble overlay(lower=ro real root, upper=tmpfs) at ${rootmnt}.
+#    NB klibc mount: all -o options BEFORE the device + mountpoint.
+if ! mount -t overlay -o lowerdir="$RO",upperdir="$RW/upper",workdir="$RW/work" overlay "${rootmnt}"; then
+    revert "overlay assembly failed"
+fi
+
+# 4. Expose the ro lower and the rw tmpfs inside the new root (admin/debug,
+#    and so ro-rw/ro-ro can flip the eMMC root). Non-fatal if these fail.
+mkdir -p "${rootmnt}/mnt/ro" "${rootmnt}/mnt/rw"
+mount -o move "$RO" "${rootmnt}/mnt/ro" 2>/dev/null
+mount -o move "$RW" "${rootmnt}/mnt/rw" 2>/dev/null
+
+log "ACTIVE -- root is overlay(read-only eMMC + tmpfs). eMMC is now read-only."
+exit 0

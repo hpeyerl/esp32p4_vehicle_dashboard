@@ -1,0 +1,200 @@
+---
+# CM3 post-flash provisioning — the steps that CAN'T be baked into the image
+# offline with losetup (they need the running ARM system: apt, pipx, native
+# compile, DTB stacking against the running kernel's headers) plus the "non-file"
+# systemd state that the target/ overlay can't carry.
+#
+# Static config files are baked into the image from ../target/ (see ../target/README.md).
+# This playbook activates the box on top of that.
+#
+# Run it LOCALLY on the box (no control node, no ssh):
+#     ./RUNME_FIRST.sh          # installs ansible-core, then runs this
+#   or, if ansible is already present:
+#     ansible-playbook -i 'localhost,' -c local provision.yml
+#
+# Idempotent: safe to re-run. After a fresh flash, REBOOT at the end to apply the
+# DTB (panel + CAN) and let the display/CAN units start.
+
+- name: Provision CM3 vehicle dashboard
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+  vars:
+    user: hpeyerl
+    repo: /home/hpeyerl/evj55-dashboard
+    overlays: /home/hpeyerl/evj55-dashboard/linux/cm3/overlays
+    target: /home/hpeyerl/evj55-dashboard/linux/cm3/target
+    dtbo: /home/hpeyerl/cm3-dtbo
+    packages:
+      - can-utils
+      - tcpdump
+      - python3-can
+      - pipx
+      - openssh-server
+      - tmux
+      - i2c-tools
+      - cmake
+      - build-essential
+      - libdrm-dev
+      - pkg-config
+      - device-tree-compiler
+    overlay_map:
+      - { src: mcp2515-2ch-hatplus.dtso, out: mcp.dtbo }
+      - { src: waveshare-12in3-dsi1.dtso, out: ws.dtbo }
+      - { src: wake-button-gpio0.dtso,    out: wake.dtbo }
+      - { src: disable-pcie.dtso,         out: pcie.dtbo }
+
+  tasks:
+    # ---- packages (network + ARM runtime; can't do offline) ----
+    - name: apt install the package set
+      become: yes
+      ansible.builtin.apt:
+        name: "{{ packages }}"
+        state: present
+        update_cache: yes
+        cache_valid_time: 3600
+
+    # ---- pipx: openinverter-can-tool (oic), as the user ----
+    - name: pipx ensurepath
+      ansible.builtin.command: pipx ensurepath
+      changed_when: false
+
+    - name: pipx install openinverter-can-tool
+      ansible.builtin.command: pipx install openinverter-can-tool
+      args:
+        creates: "/home/{{ user }}/.local/share/pipx/venvs/openinverter-can-tool"
+
+    # ---- native app build (ARM compile; -j1 avoids the LVGL parallel race) ----
+    - name: cmake configure
+      ansible.builtin.command: cmake -B build -S .
+      args:
+        chdir: "{{ repo }}/linux"
+        creates: "{{ repo }}/linux/build/CMakeCache.txt"
+
+    - name: cmake build (-j1, LVGL parallel race)
+      ansible.builtin.command: cmake --build build -j1
+      args:
+        chdir: "{{ repo }}/linux"
+        creates: "{{ repo }}/linux/build/dashboard"
+
+    # ---- device tree: compile overlays, stack onto the base DTB ----
+    - name: ensure dtbo dir
+      become: yes
+      ansible.builtin.file:
+        path: "{{ dtbo }}"
+        state: directory
+        owner: "{{ user }}"
+        group: "{{ user }}"
+        mode: "0755"
+
+    - name: compile DT overlays (.dtso -> .dtbo)
+      ansible.builtin.command: >
+        dtc -@ -I dts -O dtb -i {{ overlays }}
+        -o {{ dtbo }}/{{ item.out }} {{ overlays }}/{{ item.src }}
+      loop: "{{ overlay_map }}"
+      changed_when: true
+
+    - name: stack overlays onto the pristine base DTB (rebuild-dtb.sh)
+      ansible.builtin.command: "{{ dtbo }}/rebuild-dtb.sh"
+      register: dtb_stack
+      changed_when: "'installed stacked DTB' in dtb_stack.stdout"
+
+    # ---- systemd state (the "non-file" steps the target/ overlay can't carry) ----
+    - name: daemon-reload
+      become: yes
+      ansible.builtin.systemd:
+        daemon_reload: yes
+
+    - name: ssh — enable + start (the real fix; force-ssh was the broken hack)
+      become: yes
+      ansible.builtin.systemd:
+        name: ssh
+        enabled: yes
+        state: started
+
+    - name: retire the obsolete force-ssh unit
+      become: yes
+      ansible.builtin.systemd:
+        name: force-ssh.service
+        enabled: no
+        state: stopped
+      failed_when: false
+
+    - name: remove force-ssh unit file
+      become: yes
+      ansible.builtin.file:
+        path: /etc/systemd/system/force-ssh.service
+        state: absent
+
+    - name: enable display + CAN units (they start on the post-flash reboot,
+            once the DTB brings up the panel + can0/can1)
+      become: yes
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: yes
+      loop:
+        - ws-panel-power.service
+        - dashboard.service
+        - ws-backlight.service
+        - can-up@can0.service
+        - can-up@can1.service
+
+    # ---- boot-time trims ----
+    - name: mask systemd-boot-update
+      become: yes
+      ansible.builtin.systemd:
+        name: systemd-boot-update.service
+        masked: yes
+
+    - name: disable NetworkManager-wait-online
+      become: yes
+      ansible.builtin.systemd:
+        name: NetworkManager-wait-online.service
+        enabled: no
+      failed_when: false
+
+    # ---- hostname (also baked in target/etc/hostname; idempotent belt-and-suspenders) ----
+    - name: set hostname
+      become: yes
+      ansible.builtin.hostname:
+        name: ev-dashboard
+
+    - name: ensure /etc/hosts maps 127.0.1.1 -> ev-dashboard
+      become: yes
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        regexp: '^127\.0\.1\.1'
+        line: "127.0.1.1\tev-dashboard"
+
+    # ---- read-only root (power-cut safe): tmpfs overlay over a ro eMMC root ----
+    # Files are static (also baked from ../target/), but install them here too so
+    # the playbook is self-sufficient. The initramfs rebuild is LAST on purpose:
+    # the overlay only activates on the *next* boot, so every provisioning write
+    # above lands on the still-read-write rootfs first. See ../target/README.md.
+    - name: install read-only-root files (hook + module list + ro helpers)
+      become: yes
+      ansible.builtin.copy:
+        remote_src: yes
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - { src: "{{ target }}/etc/initramfs-tools/scripts/init-bottom/overlayroot", dest: /etc/initramfs-tools/scripts/init-bottom/overlayroot, mode: "0755" }
+        - { src: "{{ target }}/etc/initramfs-tools/modules",                          dest: /etc/initramfs-tools/modules,                          mode: "0644" }
+        - { src: "{{ target }}/usr/local/sbin/ro-rw",                                 dest: /usr/local/sbin/ro-rw,                                 mode: "0755" }
+        - { src: "{{ target }}/usr/local/sbin/ro-ro",                                 dest: /usr/local/sbin/ro-ro,                                 mode: "0755" }
+
+    - name: regenerate initramfs with the overlay-root hook (must be the LAST write)
+      become: yes
+      ansible.builtin.command: update-initramfs -u -k "{{ ansible_kernel }}"
+      changed_when: true
+
+    - name: DONE
+      ansible.builtin.debug:
+        msg:
+          - "Provisioning complete."
+          - "REBOOT now to apply the stacked DTB (panel + CAN), start the dashboard,"
+          - "and activate the read-only tmpfs-overlay root:  sudo reboot"
+          - "After reboot the eMMC is READ-ONLY. To persist a change: sudo ro-rw / edit /mnt/ro / sudo ro-ro / reboot."

@@ -1,0 +1,20 @@
+#!/bin/sh
+# ro-rw -- temporarily make the read-only eMMC root writable, to persist a
+# change across reboots while the tmpfs overlay-root is active.
+#
+# While overlayroot is active, / is a RAM overlay (edits there vanish on
+# reboot). The real eMMC root is mounted read-only at /mnt/ro. Run this to
+# flip it read-write, edit under /mnt/ro, then run `ro-ro` and reboot.
+#
+# If the overlay is NOT active (e.g. booted with overlayroot=off), / itself is
+# the eMMC root; this remounts / read-write instead.
+
+set -e
+if mountpoint -q /mnt/ro; then
+    mount -o remount,rw /mnt/ro
+    echo "eMMC root is READ-WRITE at /mnt/ro."
+    echo "Edit files under /mnt/ro/... , then:  sudo ro-ro   (and reboot to apply)"
+else
+    mount -o remount,rw /
+    echo "overlay not active -- remounted / read-write directly."
+fi
