@@ -17,6 +17,10 @@
 // =============================================================
 #include <stdbool.h>
 #include <stdint.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <stdio.h>
+#include <string.h>
 #include "gear_shifter.h"   // extern "C"  (clean, no ESP deps)
 #include "wifi_manager.h"   // extern "C"  (compat shim)
 
@@ -24,8 +28,31 @@
 // which is compiled into the build (it also provides parse_can_frame for the
 // SocketCAN path). Don't redefine them here.
 
-// --- wifi_manager ---
-bool wifi_manager_is_connected(void) { return false; }
+// --- wifi_manager: report the REAL link state on Linux ---
+// A wifi iface exposes /sys/class/net/<if>/wireless/; operstate "up" = associated
+// with carrier. Scans all ifaces so it works for wlan0 / wlp* alike. No deps.
+bool wifi_manager_is_connected(void)
+{
+    DIR *d = opendir("/sys/class/net");
+    if (!d) return false;
+    bool up = false;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL && !up) {
+        if (e->d_name[0] == '.') continue;
+        char path[300];
+        struct stat st;
+        snprintf(path, sizeof path, "/sys/class/net/%s/wireless", e->d_name);
+        if (stat(path, &st) != 0) continue;          // not a wireless iface
+        snprintf(path, sizeof path, "/sys/class/net/%s/operstate", e->d_name);
+        FILE *f = fopen(path, "r");
+        if (!f) continue;
+        char s[16] = {0};
+        if (fgets(s, sizeof s, f) && strncmp(s, "up", 2) == 0) up = true;
+        fclose(f);
+    }
+    closedir(d);
+    return up;
+}
 
 // --- gear_shifter (no CAN on Linux; just track the request) ---
 static volatile int8_t s_gear = -1;   // 0=P 1=R 2=N 3=D, -1 = none
