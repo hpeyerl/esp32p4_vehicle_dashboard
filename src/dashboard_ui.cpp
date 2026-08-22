@@ -373,7 +373,7 @@ void dashboard_ui_create(lv_display_t *disp)
 
     const lv_coord_t W      = LCD_H_RES;
     const lv_coord_t H      = LCD_V_RES;
-    const lv_coord_t MAIN_H = H - BOT_H;  // leave room for nav bar
+    const lv_coord_t MAIN_H = H;          // full height — bottom tab bar removed
 
 
     // ── Left panel — bracket shape via radius on inner-top and inner-bottom corners
@@ -622,19 +622,17 @@ void dashboard_ui_create(lv_display_t *disp)
                               &lv_font_montserrat_48);
     lv_obj_align(s_lbl_aux_v, LV_ALIGN_TOP_LEFT, 0, 226);
 
-    // ── CAN + WiFi + rw-root status — a row under the 🏠 ◀ ▶ nav cluster ──────
-    // Nav buttons are RIGHT_MID at xoff -168/-88/-8; line these up beneath them.
+    // ── CAN + WiFi + rw-root status (bottom of right panel) ──────────────────
     {
-        const lv_coord_t sy = 50;   // below the 64px button row
-        s_dot_can = make_label(scr, LV_SYMBOL_LOOP, CLR_RED, &lv_font_montserrat_18);
-        lv_obj_align(s_dot_can, LV_ALIGN_RIGHT_MID, -192, sy);
-
-        s_dot_wifi = make_label(scr, LV_SYMBOL_WIFI, CLR_RED, &lv_font_montserrat_18);
-        lv_obj_align(s_dot_wifi, LV_ALIGN_RIGHT_MID, -112, sy);
-
-        // read-write-root warning (⚠) — hidden unless / is mounted rw (should be ro)
-        s_dot_rw = make_label(scr, LV_SYMBOL_WARNING, CLR_AMBER, &lv_font_montserrat_18);
-        lv_obj_align(s_dot_rw, LV_ALIGN_RIGHT_MID, -32, sy);
+        lv_coord_t panel_cx = W - RIGHT_W / 2;   // horizontal center of right panel
+        lv_coord_t row_y    = MAIN_H - 42;       // near bottom of the panel
+        s_dot_can = make_label(scr, LV_SYMBOL_LOOP, CLR_RED, &lv_font_montserrat_14);
+        lv_obj_set_pos(s_dot_can, panel_cx - 46, row_y);
+        s_dot_wifi = make_label(scr, LV_SYMBOL_WIFI, CLR_RED, &lv_font_montserrat_14);
+        lv_obj_set_pos(s_dot_wifi, panel_cx - 6, row_y);
+        // rw-root warning (⚠) — hidden unless the eMMC (/mnt/ro) is mounted rw
+        s_dot_rw = make_label(scr, LV_SYMBOL_WARNING, CLR_AMBER, &lv_font_montserrat_14);
+        lv_obj_set_pos(s_dot_rw, panel_cx + 34, row_y);
         lv_obj_add_flag(s_dot_rw, LV_OBJ_FLAG_HIDDEN);
     }
 
@@ -688,45 +686,8 @@ void dashboard_ui_create(lv_display_t *disp)
         lv_obj_set_pos(s_lbl_motor_badge, cluster_cx + 14, badge_y);
     }
 
-    // ── Bottom nav bar ────────────────────────────────────────────────────
-    lv_obj_t *nav = lv_obj_create(scr);
-    lv_obj_set_pos(nav, 0, H - BOT_H);
-    lv_obj_set_size(nav, W, BOT_H);
-    lv_obj_set_style_bg_color(nav, CLR_PANEL, 0);
-    lv_obj_set_style_bg_opa(nav, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(nav, 1, 0);
-    lv_obj_set_style_border_color(nav, CLR_BORDER, 0);
-    lv_obj_set_style_border_side(nav, LV_BORDER_SIDE_TOP, 0);
-    lv_obj_set_style_radius(nav, 0, 0);
-    lv_obj_set_style_pad_all(nav, 0, 0);
-    lv_obj_clear_flag(nav, LV_OBJ_FLAG_SCROLLABLE);
-
-    // Nav icons — stub labels for now, replaced by icons when screens exist
-#ifdef BMS_HTTP
-    const char *nav_labels[] = {"  HOME  ", "SETTINGS", " STATUS ", "  BMS   "};
-    const int   nav_cnt = 4;
-#else
-    const char *nav_labels[] = {"  HOME  ", "SETTINGS", " STATUS "};
-    const int   nav_cnt = NAV_ICON_CNT;
-#endif
-    for (int i = 0; i < nav_cnt; i++) {
-        lv_obj_t *btn = lv_obj_create(nav);
-        lv_obj_set_size(btn, NAV_ICON_W, BOT_H - 4);
-        lv_obj_set_pos(btn, W/2 - (nav_cnt * NAV_ICON_W)/2 + i * NAV_ICON_W, 2);
-        lv_obj_set_style_bg_color(btn, i == 0 ? CLR_CYAN : CLR_PANEL, 0);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_width(btn, 0, 0);
-        lv_obj_set_style_radius(btn, 6, 0);
-        lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(btn, prv_nav_tap_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
-        lv_obj_t *lbl = lv_label_create(btn);
-        lv_label_set_text(lbl, nav_labels[i]);
-        lv_obj_set_style_text_color(lbl, i == 0 ? CLR_BG : CLR_TEXT_MID, 0);
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
-        lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 0);
-    }
-
+    // (bottom tab bar removed — navigation is the 🏠 ◀ ▶ cluster added below;
+    //  MAIN_H now spans full height so the combs aren't cut off.)
     prv_add_arrow_nav(scr);
 }
 // Forward declarations for screen helpers
@@ -1034,7 +995,9 @@ void dashboard_ui_update(const DashData *d)
             last_wifi_ok = wifi_ok;
         }
 #ifdef __linux__
-        // read-only-root health: warn (⚠) if / is mounted read-write (should be ro)
+        // read-only-root health: warn (⚠) if the eMMC is unlocked. Root "/" is a
+        // tmpfs overlay (always rw); the real disk is the ro lower at /mnt/ro, so
+        // check THAT — rw there = someone left it unlocked after an upload.
         {
             static int32_t  last_rw    = -1;
             static uint32_t rw_next_ms = 0;
@@ -1042,7 +1005,7 @@ void dashboard_ui_update(const DashData *d)
             if (s_dot_rw && (int32_t)(t - rw_next_ms) >= 0) {
                 rw_next_ms = t + 2000;   // poll every 2s
                 struct statvfs vfs;
-                int rw = (statvfs("/", &vfs) == 0) ? !(vfs.f_flag & ST_RDONLY) : 0;
+                int rw = (statvfs("/mnt/ro", &vfs) == 0) ? !(vfs.f_flag & ST_RDONLY) : 0;
                 if (rw != last_rw) {
                     if (rw) lv_obj_clear_flag(s_dot_rw, LV_OBJ_FLAG_HIDDEN);
                     else    lv_obj_add_flag  (s_dot_rw, LV_OBJ_FLAG_HIDDEN);
