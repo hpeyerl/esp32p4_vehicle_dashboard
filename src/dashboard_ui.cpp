@@ -81,10 +81,13 @@ static Meter s_bat_meter;
 static Meter s_pv_meter;
 static Meter s_pa_meter;
 
-static lv_obj_t *s_bar_soc     = NULL;
+#define SOC_TICKS 40
+#define PWR_TICKS 40
+static lv_obj_t *s_arc_combs   = NULL;   // container for both comb arcs (single fade handle)
+static lv_obj_t *s_soc_tick[SOC_TICKS];  // SOC comb: fills bottom->top
+static lv_obj_t *s_pwr_tick[PWR_TICKS];  // power comb: center-zero, drive up / regen down
 static lv_obj_t *s_lbl_soc_pct = NULL;
 static lv_obj_t *s_lbl_range   = NULL;
-static lv_obj_t *s_bar_pwr     = NULL;
 static lv_obj_t *s_lbl_pwr_val = NULL;
 static lv_obj_t *s_lbl_speed   = NULL;
 static lv_obj_t *s_lbl_prnd[4];
@@ -243,6 +246,39 @@ static void make_meter(Meter *m, lv_obj_t *parent,
     lv_obj_set_pos(m->lbl_val, cx - 20, cy + 16);
 }
 
+// Build `n` radial tick marks along a CW arc from a0 to a1 degrees (a1 may
+// exceed 360 to cross the 0° point), centered at (cx,cy) radius r. Each tick is
+// a thin rect of radial length `len` / tangential width `tw`, rotated to point
+// at the center. Unlit ticks (CLR_BORDER) form the track; the update loop
+// recolors them. Mirrors the meter-needle transform pattern. Stored in out[].
+static void make_comb(lv_obj_t *parent, lv_obj_t **out, int n,
+                      lv_coord_t cx, lv_coord_t cy, lv_coord_t r,
+                      lv_coord_t len, lv_coord_t tw, float a0, float a1)
+{
+    for (int i = 0; i < n; i++) {
+        float t   = (n > 1) ? (float)i / (float)(n - 1) : 0.0f;
+        float ang = a0 + t * (a1 - a0);              // degrees, CW
+        float rad = ang * (float)M_PI / 180.0f;
+        lv_coord_t x = cx + (lv_coord_t)(r * cosf(rad));
+        lv_coord_t y = cy + (lv_coord_t)(r * sinf(rad));
+        lv_obj_t *tk = lv_obj_create(parent);
+        lv_obj_set_size(tk, tw, len);
+        lv_obj_set_style_border_width(tk, 0, 0);
+        lv_obj_set_style_radius(tk, 1, 0);
+        lv_obj_set_style_bg_opa(tk, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(tk, CLR_BORDER, 0);   // start unlit
+        lv_obj_set_pos(tk, x - tw / 2, y - len / 2);
+        lv_obj_set_style_transform_pivot_x(tk, tw / 2, 0);
+        lv_obj_set_style_transform_pivot_y(tk, len / 2, 0);
+        int a10 = (int)lroundf((ang - 90.0f) * 10.0f); // 0.1° units, radial
+        a10 %= 3600; if (a10 < 0) a10 += 3600;
+        lv_obj_set_style_transform_angle(tk, a10, 0);
+        lv_obj_clear_flag(tk, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_clear_flag(tk, LV_OBJ_FLAG_SCROLLABLE);
+        out[i] = tk;
+    }
+}
+
 // Update needle angle for a meter.
 // pct: 0.0 (left/min) to 1.0 (right/max)
 // Needle at pct=0 points left (270° in LVGL = pointing up when flat-bottom arc)
@@ -382,35 +418,22 @@ void dashboard_ui_create(lv_display_t *disp)
     lv_coord_t soc_cx = LEFT_W + ARC_INSET;    // center x — off right edge of left panel
     lv_coord_t soc_cy = MAIN_H / 2;         // center y — vertical midpoint
 
-    // SOC track (gray outline)
-    lv_obj_t *soc_track = lv_arc_create(scr);
-    lv_obj_set_size(soc_track, ARC_R * 2, ARC_R * 2);
-    lv_obj_set_pos(soc_track, soc_cx - ARC_R, soc_cy - ARC_R);
-    lv_arc_set_bg_angles(soc_track, ARC_START, ARC_END);
-    lv_arc_set_angles(soc_track, ARC_START, ARC_START);  // empty fill
-    lv_obj_set_style_arc_color(soc_track, CLR_BORDER, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(soc_track, CLR_BORDER, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_width(soc_track, ARC_W, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(soc_track, ARC_W, LV_PART_INDICATOR);
-    lv_obj_set_style_bg_opa(soc_track, LV_OPA_TRANSP, 0);
-    lv_obj_remove_style(soc_track, NULL, LV_PART_KNOB);
-    lv_obj_clear_flag(soc_track, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_clear_flag(soc_track, LV_OBJ_FLAG_SCROLLABLE);
+    // Comb container — holds both arcs' ticks; single handle for the stale fade.
+    // Full main area, transparent, overflow visible (ticks sit at arc radius).
+    s_arc_combs = lv_obj_create(scr);
+    lv_obj_set_pos(s_arc_combs, 0, 0);
+    lv_obj_set_size(s_arc_combs, W, MAIN_H);
+    lv_obj_set_style_bg_opa(s_arc_combs, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_arc_combs, 0, 0);
+    lv_obj_set_style_pad_all(s_arc_combs, 0, 0);
+    lv_obj_add_flag(s_arc_combs, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
+    lv_obj_clear_flag(s_arc_combs, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(s_arc_combs, LV_OBJ_FLAG_SCROLLABLE);
 
-    // SOC fill arc — same position, fill updates with SOC value
-    s_bar_soc = lv_arc_create(scr);
-    lv_obj_set_size(s_bar_soc, ARC_R * 2, ARC_R * 2);
-    lv_obj_set_pos(s_bar_soc, soc_cx - ARC_R, soc_cy - ARC_R);
-    lv_arc_set_bg_angles(s_bar_soc, ARC_START, ARC_END);
-    lv_arc_set_angles(s_bar_soc, ARC_START, ARC_START);  // starts empty
-    lv_obj_set_style_arc_color(s_bar_soc, CLR_BORDER, LV_PART_MAIN);  // bg transparent
-    lv_obj_set_style_arc_color(s_bar_soc, CLR_GREEN, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_width(s_bar_soc, ARC_W, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(s_bar_soc, ARC_W, LV_PART_INDICATOR);
-    lv_obj_set_style_bg_opa(s_bar_soc, LV_OPA_TRANSP, 0);
-    lv_obj_remove_style(s_bar_soc, NULL, LV_PART_KNOB);
-    lv_obj_clear_flag(s_bar_soc, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_clear_flag(s_bar_soc, LV_OBJ_FLAG_SCROLLABLE);
+    // SOC comb — radial ticks along the "(" arc. Unlit ticks form the track;
+    // the update lights ticks bottom->top with a single white current-level tick.
+    make_comb(s_arc_combs, s_soc_tick, SOC_TICKS,
+              soc_cx, soc_cy, ARC_R, ARC_W, 5, ARC_START, ARC_END);
 
     // SOC % label — centered inside the bottom of the arc stroke
     // RANGE label — to the left of the arc at the same height
@@ -482,35 +505,12 @@ void dashboard_ui_create(lv_display_t *disp)
     lv_coord_t pwr_cx = W - RIGHT_W - ARC_INSET;
     lv_coord_t pwr_cy = MAIN_H / 2;
 
-    // Power track (gray)
-    lv_obj_t *pwr_track = lv_arc_create(scr);
-    lv_obj_set_size(pwr_track, ARC_R * 2, ARC_R * 2);
-    lv_obj_set_pos(pwr_track, pwr_cx - ARC_R, pwr_cy - ARC_R);
-    lv_arc_set_bg_angles(pwr_track, PWR_ARC_START, PWR_ARC_END);
-    lv_arc_set_angles(pwr_track, PWR_ARC_START, PWR_ARC_START);
-    lv_obj_set_style_arc_color(pwr_track, CLR_BORDER, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(pwr_track, CLR_BORDER, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_width(pwr_track, ARC_W, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(pwr_track, ARC_W, LV_PART_INDICATOR);
-    lv_obj_set_style_bg_opa(pwr_track, LV_OPA_TRANSP, 0);
-    lv_obj_remove_style(pwr_track, NULL, LV_PART_KNOB);
-    lv_obj_clear_flag(pwr_track, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_clear_flag(pwr_track, LV_OBJ_FLAG_SCROLLABLE);
-
-    // Power fill arc
-    s_bar_pwr = lv_arc_create(scr);
-    lv_obj_set_size(s_bar_pwr, ARC_R * 2, ARC_R * 2);
-    lv_obj_set_pos(s_bar_pwr, pwr_cx - ARC_R, pwr_cy - ARC_R);
-    lv_arc_set_bg_angles(s_bar_pwr, PWR_ARC_START, PWR_ARC_END);
-    lv_arc_set_angles(s_bar_pwr, PWR_ARC_START, PWR_ARC_START);
-    lv_obj_set_style_arc_color(s_bar_pwr, CLR_BORDER, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(s_bar_pwr, CLR_ORANGE, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_width(s_bar_pwr, ARC_W, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(s_bar_pwr, ARC_W, LV_PART_INDICATOR);
-    lv_obj_set_style_bg_opa(s_bar_pwr, LV_OPA_TRANSP, 0);
-    lv_obj_remove_style(s_bar_pwr, NULL, LV_PART_KNOB);
-    lv_obj_clear_flag(s_bar_pwr, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_clear_flag(s_bar_pwr, LV_OBJ_FLAG_SCROLLABLE);
+    // Power comb — radial ticks along the ")" arc. a0..a0+160 crosses 0° (=360°)
+    // at the midpoint, so tick PWR_TICKS/2 is the center/zero: drive lights
+    // upward (orange), regen downward (green), with a white current-level tick.
+    make_comb(s_arc_combs, s_pwr_tick, PWR_TICKS,
+              pwr_cx, pwr_cy, ARC_R, ARC_W, 5,
+              PWR_ARC_START, PWR_ARC_START + 160);
 
     // Power labels — at the bottom endpoint of the arc (PWR_ARC_END angle)
     {
@@ -746,8 +746,7 @@ void dashboard_ui_update(const DashData *d)
             if (s_lbl_speed)   lv_obj_set_style_text_opa(s_lbl_speed,   o, 0);
             if (s_lbl_soc_pct) lv_obj_set_style_text_opa(s_lbl_soc_pct, o, 0);
             if (s_lbl_pwr_val) lv_obj_set_style_text_opa(s_lbl_pwr_val, o, 0);
-            if (s_bar_soc)     lv_obj_set_style_arc_opa (s_bar_soc, o, LV_PART_INDICATOR);
-            if (s_bar_pwr)     lv_obj_set_style_arc_opa (s_bar_pwr, o, LV_PART_INDICATOR);
+            if (s_arc_combs)   lv_obj_set_style_opa      (s_arc_combs, o, 0);
             stale_prev = (int)can_stale;
         }
     }
@@ -824,14 +823,21 @@ void dashboard_ui_update(const DashData *d)
     // Arc sweeps from ARC_START(120°) to ARC_END(240°) = 120° total.
     // Fill from start(120°) upward: 0%=empty, 100%=full 120° sweep.
     static lv_color_t last_soc_col = {0};
+    static int        last_soc_lit = -1;
     float soc_f = d->soc_pct / 100.0f;
+    if (soc_f < 0.0f) soc_f = 0.0f; if (soc_f > 1.0f) soc_f = 1.0f;
     lv_color_t soc_col = soc_f >= 0.50f ? CLR_GREEN :
                          soc_f >= 0.21f ? CLR_AMBER : CLR_RED;
-    int16_t soc_end_angle = (int16_t)(ARC_START + soc_f * (ARC_END - ARC_START));
-    lv_arc_set_angles(s_bar_soc, ARC_START, soc_end_angle);
-    if (memcmp(&soc_col, &last_soc_col, sizeof(lv_color_t)) != 0) {
-        lv_obj_set_style_arc_color(s_bar_soc, soc_col, LV_PART_INDICATOR);
+    int soc_lit = (int)lroundf(soc_f * SOC_TICKS);
+    if (soc_lit != last_soc_lit ||
+        memcmp(&soc_col, &last_soc_col, sizeof(lv_color_t)) != 0) {
+        for (int i = 0; i < SOC_TICKS; i++) {
+            lv_color_t c = (i < soc_lit) ? soc_col : CLR_BORDER;
+            if (i == soc_lit - 1) c = CLR_WHITE;   // current-level marker
+            lv_obj_set_style_bg_color(s_soc_tick[i], c, 0);
+        }
         lv_obj_set_style_text_color(s_lbl_soc_pct, soc_col, 0);
+        last_soc_lit = soc_lit;
         last_soc_col = soc_col;
     }
     snprintf(buf, sizeof(buf), "%d%%", (int)d->soc_pct);
@@ -903,28 +909,36 @@ void dashboard_ui_update(const DashData *d)
     // Zero at arc midpoint (300+60°/2 = 330°... wraps = center at 0°/360°).
     // Drive (+kW): fills upper half from center toward PWR_ARC_END(60°).
     // Regen (-kW): fills lower half from center toward PWR_ARC_START(300°).
-    static lv_color_t last_pwr_col = {0};
+    static lv_color_t last_pwr_col    = {0};
+    static int        last_pwr_signed = -99999;
     float kw      = d->power_kw;
     float kw_frac = fabsf(kw) / PWR_FULL;
     if (kw_frac > 1.0f) kw_frac = 1.0f;
     lv_color_t pwr_col = kw >= 0.0f ? CLR_ORANGE : CLR_GREEN;
 
-    // Arc center angle = midpoint of 300°→60° sweep = 360° = 0°
-    // Half sweep = 60°
-    // Drive: from 0° (center) toward 60° = end angle increases from 0
-    // Regen: from 300° (start) toward 0° = start angle increases toward 0
-    int16_t pwr_half = 60;  // half of 120° total sweep
-    if (kw >= 0.0f) {
-        int16_t fill = (int16_t)(kw_frac * pwr_half);
-        lv_arc_set_angles(s_bar_pwr, 360 - fill, 360);  // drive: center→top
-    } else {
-        int16_t fill = (int16_t)(kw_frac * pwr_half);
-        lv_arc_set_angles(s_bar_pwr, 360, 360 + fill);  // regen: center→bottom
-    }
-    if (memcmp(&pwr_col, &last_pwr_col, sizeof(lv_color_t)) != 0) {
-        lv_obj_set_style_arc_color(s_bar_pwr, pwr_col, LV_PART_INDICATOR);
+    // Comb center (index PWR_HALF) = zero. Drive lights upward (toward top),
+    // regen downward (toward bottom); one white tick marks the current level.
+    const int PWR_HALF = PWR_TICKS / 2;
+    int pwr_k      = (int)lroundf(kw_frac * PWR_HALF);   // lit ticks this side
+    int pwr_signed = (kw >= 0.0f) ? pwr_k : -pwr_k;      // change-detect key
+    if (pwr_signed != last_pwr_signed ||
+        memcmp(&pwr_col, &last_pwr_col, sizeof(lv_color_t)) != 0) {
+        for (int i = 0; i < PWR_TICKS; i++)
+            lv_obj_set_style_bg_color(s_pwr_tick[i], CLR_BORDER, 0);
+        if (kw >= 0.0f) {                                // drive: up from center
+            for (int i = 0; i < pwr_k; i++)
+                lv_obj_set_style_bg_color(s_pwr_tick[PWR_HALF - 1 - i], pwr_col, 0);
+            lv_obj_set_style_bg_color(
+                s_pwr_tick[pwr_k > 0 ? PWR_HALF - pwr_k : PWR_HALF - 1], CLR_WHITE, 0);
+        } else {                                         // regen: down from center
+            for (int i = 0; i < pwr_k; i++)
+                lv_obj_set_style_bg_color(s_pwr_tick[PWR_HALF + i], pwr_col, 0);
+            lv_obj_set_style_bg_color(
+                s_pwr_tick[pwr_k > 0 ? PWR_HALF + pwr_k - 1 : PWR_HALF], CLR_WHITE, 0);
+        }
         lv_obj_set_style_text_color(s_lbl_pwr_val, pwr_col, 0);
-        last_pwr_col = pwr_col;
+        last_pwr_signed = pwr_signed;
+        last_pwr_col    = pwr_col;
     }
     snprintf(buf, sizeof(buf), "%+d", (int)kw);
     lv_label_set_text(s_lbl_pwr_val, buf);
