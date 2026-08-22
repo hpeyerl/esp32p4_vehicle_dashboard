@@ -1287,6 +1287,13 @@ static lv_obj_t *s_bms_modt[BMS_UI_MODS];
 static lv_obj_t *s_bms_cell[BMS_UI_MODS][BMS_UI_CELLS];
 static lv_obj_t *s_bms_celllbl[BMS_UI_MODS][BMS_UI_CELLS];
 
+// Physical mounting in the truck: which modules sit at the FRONT (rest = rear),
+// so front/rear thermal groups are visually separable. 0-based (idx 0 = M1).
+// Front = M1, M4, M5 (M5 provisional — 3rd front module pending confirmation).
+// Edit this array to re-map front vs rear.
+static const bool bms_mod_front[BMS_UI_MODS] =
+    { true, false, false, true, true, false, false, false };
+
 // f: 0 (lowest cell) .. 1 (highest cell). blue -> green -> red, dimmed by scale.
 static lv_color_t bms_heat(float f, float scale)
 {
@@ -1315,8 +1322,8 @@ static void prv_ensure_bms_screen(void)
 
     // ── summary strip ──
     lv_obj_t *sum = lv_obj_create(s_scr_bms);
-    lv_obj_set_size(sum, W - 196 - 12, 92);          // start right of the HOME button
-    lv_obj_align(sum, LV_ALIGN_TOP_RIGHT, -12, 10);
+    lv_obj_set_size(sum, W - 12 - NAV_SAFE_RIGHT, 92);   // match module-row span below
+    lv_obj_align(sum, LV_ALIGN_TOP_LEFT, 12, 10);        // left-align with the module cards
     lv_obj_set_style_bg_opa(sum, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(sum, 0, 0);
     lv_obj_set_style_pad_all(sum, 0, 0);
@@ -1360,21 +1367,23 @@ static void prv_ensure_bms_screen(void)
     for (int m = 0; m < BMS_UI_MODS; m++) {
         lv_obj_t *card = lv_obj_create(mods);
         s_bms_modcard[m] = card;
+        const bool     front = bms_mod_front[m];          // truck front vs rear
+        const lv_color_t grp  = front ? CLR_CYAN : CLR_AMBER;
         lv_obj_set_flex_grow(card, 1);
         lv_obj_set_height(card, LV_PCT(100));
         lv_obj_set_style_bg_color(card, CLR_PANEL, 0);
-        lv_obj_set_style_border_color(card, CLR_BORDER, 0);
-        lv_obj_set_style_border_width(card, 1, 0);
+        lv_obj_set_style_border_color(card, grp, 0);       // group-colored ring
+        lv_obj_set_style_border_width(card, 2, 0);
         lv_obj_set_style_radius(card, 8, 0);
         lv_obj_set_style_pad_all(card, 6, 0);
         lv_obj_set_style_pad_row(card, 3, 0);
         lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
         lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
-        char hb[16]; snprintf(hb, sizeof hb, "M%d", m + 1);
+        char hb[20]; snprintf(hb, sizeof hb, "M%d  %s", m + 1, front ? "FWD" : "REAR");
         lv_obj_t *hdr = lv_label_create(card);
         lv_label_set_text(hdr, hb);
-        lv_obj_set_style_text_color(hdr, CLR_CYAN, 0);
+        lv_obj_set_style_text_color(hdr, grp, 0);
         lv_obj_set_style_text_font(hdr, &lv_font_montserrat_18, 0);
         lv_obj_t *mv = lv_label_create(card);
         lv_label_set_text(mv, "--");
