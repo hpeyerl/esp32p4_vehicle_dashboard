@@ -201,6 +201,9 @@ int main(int argc, char **argv)
     int can_fd = open_can_socket(can_iface);
     bool use_can = (can_fd >= 0);
     s_can_tx_fd = can_fd;   // enable SDO param writes (regen slider) over the same socket
+    // Second bus (can1): RX-only / passive per the HAT CAN map (vehicle + charger).
+    // -1 until it exists (no HAT yet); retried below like can0 for the boot race.
+    int can1_fd = open_can_socket("can1");
     // SIM sine-wave data is for bench/animation testing ONLY — off by default so a real
     // vehicle boot never shows fake numbers. Enable with DASH_SIM=1 for demos.
     const bool sim_enabled = (getenv("DASH_SIM") != NULL);
@@ -220,42 +223,53 @@ int main(int argc, char **argv)
     bool     regen_readback_done = false;    // set once the VCU answers our read
     uint32_t regen_req_t0 = 0;               // last read-request time (0 = never)
     dash_screen_t prev_screen = DASH_SCREEN_HOME;   // for STATUS-entry edge detect
+    // Process one frame from either bus: shared parser + SDO readback + bus-load.
+    auto process_frame = [&](const struct can_frame &fr) {
+        uint32_t id = fr.can_id & CAN_EFF_MASK;
+        parse_can_frame(id, fr.data, millis_cb());
+        if (id == 0x583) {   // SDO reply: pick off a regenmax read for the slider
+            uint8_t  cmd   = fr.data[0];
+            uint16_t index = (uint16_t)(fr.data[1] | (fr.data[2] << 8));
+            uint16_t pid   = (uint16_t)(((index & 0xFF) << 8) | fr.data[3]);
+            if ((cmd == 0x43 || cmd == 0x4B) && pid == REGEN_PARAM) {
+                int32_t raw = (int32_t)(fr.data[4] | (fr.data[5] << 8) |
+                                        (fr.data[6] << 16) | (fr.data[7] << 24));
+                dashboard_ui_set_regen_current(raw / 32.0f);
+                regen_readback_done = true;
+            }
+        }
+        int ov = (fr.can_id & CAN_EFF_FLAG) ? 67 : 47;
+        canload_bits += (uint64_t)((ov + 8 * fr.can_dlc) * 1.15f);
+    };
     for (;;) {
-        // Not on CAN yet? retry ~1 Hz and switch over as soon as the iface is up.
-        if (!use_can) {
+        // Not on CAN yet (or can1 still down)? retry ~1 Hz; switch over as ifaces appear.
+        if (!use_can || can1_fd < 0) {
             uint32_t now = millis_cb();
             if (now - can_retry_t0 >= 1000) {
                 can_retry_t0 = now;
-                can_fd = open_can_socket(can_iface);
-                if (can_fd >= 0) {
-                    use_can = true;
-                    s_can_tx_fd = can_fd;
-                    printf("data source: switched to %s\n", can_iface);
+                if (!use_can) {
+                    can_fd = open_can_socket(can_iface);
+                    if (can_fd >= 0) {
+                        use_can = true;
+                        s_can_tx_fd = can_fd;
+                        printf("data source: switched to %s\n", can_iface);
+                    }
                 }
+                if (can1_fd < 0) can1_fd = open_can_socket("can1");
             }
         }
         if (use_can) {
-            // drain all pending frames -> the shared parser updates g_dash
+            // drain both buses -> shared parser; stamp per-bus liveness by interface
             struct can_frame fr;
             while (read(can_fd, &fr, sizeof fr) == (ssize_t)sizeof fr) {
-                uint32_t id = fr.can_id & CAN_EFF_MASK;
-                parse_can_frame(id, fr.data, millis_cb());
-                // SDO response (0x583): pick off a regenmax read reply for the slider
-                if (id == 0x583) {
-                    uint8_t  cmd   = fr.data[0];
-                    uint16_t index = (uint16_t)(fr.data[1] | (fr.data[2] << 8));
-                    uint16_t pid   = (uint16_t)(((index & 0xFF) << 8) | fr.data[3]);
-                    if ((cmd == 0x43 || cmd == 0x4B) && pid == REGEN_PARAM) {   // read reply
-                        int32_t raw = (int32_t)(fr.data[4] | (fr.data[5] << 8) |
-                                                (fr.data[6] << 16) | (fr.data[7] << 24));
-                        dashboard_ui_set_regen_current(raw / 32.0f);
-                        regen_readback_done = true;
-                    }
-                }
-                // bus-load tally: overhead + data bits, +~15% avg bit-stuffing
-                int ov = (fr.can_id & CAN_EFF_FLAG) ? 67 : 47;
-                canload_bits += (uint64_t)((ov + 8 * fr.can_dlc) * 1.15f);
+                g_dash.last_ms_can0 = millis_cb();
+                process_frame(fr);
             }
+            if (can1_fd >= 0)
+                while (read(can1_fd, &fr, sizeof fr) == (ssize_t)sizeof fr) {
+                    g_dash.last_ms_can1 = millis_cb();
+                    process_frame(fr);
+                }
         } else if (sim_enabled) {
             t += 0.05f;
             g_dash.soc_pct         = 50.0f + 45.0f * sinf(t * 0.3f);

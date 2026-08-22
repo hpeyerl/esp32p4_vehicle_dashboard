@@ -107,7 +107,8 @@ static lv_obj_t *s_lbl_cruise_st = NULL;  // CC / SET / RES indicator
 static lv_obj_t *s_lbl_eff     = NULL;
 static lv_obj_t *s_lbl_trip    = NULL;
 static lv_obj_t *s_lbl_aux_v   = NULL;
-static lv_obj_t *s_dot_can     = NULL;
+static lv_obj_t *s_dot_can     = NULL;   // CAN0 liveness
+static lv_obj_t *s_dot_can1    = NULL;   // CAN1 liveness
 static lv_obj_t *s_dot_wifi    = NULL;
 static lv_obj_t *s_dot_rw      = NULL;   // read-write-root warning (should be ro)
 static lv_obj_t *s_lbl_odo_val      = NULL;
@@ -622,17 +623,19 @@ void dashboard_ui_create(lv_display_t *disp)
                               &lv_font_montserrat_48);
     lv_obj_align(s_lbl_aux_v, LV_ALIGN_TOP_LEFT, 0, 226);
 
-    // ── CAN + WiFi + rw-root status (bottom of right panel) ──────────────────
+    // ── CAN0 + CAN1 + WiFi + rw-root status (bottom of right panel) ──────────
     {
         lv_coord_t panel_cx = W - RIGHT_W / 2;   // horizontal center of right panel
         lv_coord_t row_y    = MAIN_H - 42;       // near bottom of the panel
         s_dot_can = make_label(scr, LV_SYMBOL_LOOP, CLR_RED, &lv_font_montserrat_14);
-        lv_obj_set_pos(s_dot_can, panel_cx - 46, row_y);
+        lv_obj_set_pos(s_dot_can, panel_cx - 66, row_y);
+        s_dot_can1 = make_label(scr, LV_SYMBOL_LOOP, CLR_RED, &lv_font_montserrat_14);
+        lv_obj_set_pos(s_dot_can1, panel_cx - 28, row_y);
         s_dot_wifi = make_label(scr, LV_SYMBOL_WIFI, CLR_RED, &lv_font_montserrat_14);
-        lv_obj_set_pos(s_dot_wifi, panel_cx - 6, row_y);
+        lv_obj_set_pos(s_dot_wifi, panel_cx + 10, row_y);
         // rw-root warning (⚠) — hidden unless the eMMC (/mnt/ro) is mounted rw
         s_dot_rw = make_label(scr, LV_SYMBOL_WARNING, CLR_AMBER, &lv_font_montserrat_14);
-        lv_obj_set_pos(s_dot_rw, panel_cx + 34, row_y);
+        lv_obj_set_pos(s_dot_rw, panel_cx + 48, row_y);
         lv_obj_add_flag(s_dot_rw, LV_OBJ_FLAG_HIDDEN);
     }
 
@@ -976,19 +979,29 @@ void dashboard_ui_update(const DashData *d)
     // ── CAN + WiFi status indicators ──────────────────────────────────────
     {
         uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
-        // CAN liveness keyed on ANY received frame (robust vs a single ID like 0x355):
-        //   <2s = fresh (green), 2-10s = stale/holding last-known (amber), >10s or never = dead (red)
-        uint32_t can_age  = now_ms - d->last_ms_any;
-        int      can_state = (d->last_ms_any == 0 || can_age > 10000) ? 2
-                             : (can_age > 2000) ? 1 : 0;
+        // Per-bus CAN liveness (each icon keyed on its own interface's last frame):
+        //   <2s fresh (green), 2-10s stale/holding (amber), >10s or never dead (red)
+        auto bus_state = [now_ms](uint32_t last) -> int {
+            if (last == 0) return 2;
+            uint32_t age = now_ms - last;
+            return age > 10000 ? 2 : (age > 2000 ? 1 : 0);
+        };
+        auto st_color = [](int s) -> lv_color_t {
+            return s == 0 ? CLR_GREEN : (s == 1 ? CLR_AMBER : CLR_RED);
+        };
+        int  can0_state = bus_state(d->last_ms_can0);
+        int  can1_state = bus_state(d->last_ms_can1);
         bool wifi_ok = wifi_manager_is_connected();
-        static int  last_can_state = -1;
-        static bool last_wifi_ok   = false;
-        if (can_state != last_can_state) {
-            lv_color_t cc = (can_state == 0) ? CLR_GREEN
-                          : (can_state == 1) ? CLR_AMBER : CLR_RED;
-            lv_obj_set_style_text_color(s_dot_can, cc, 0);
-            last_can_state = can_state;
+        static int  last_can0    = -1;
+        static int  last_can1    = -1;
+        static bool last_wifi_ok = false;
+        if (can0_state != last_can0) {
+            lv_obj_set_style_text_color(s_dot_can,  st_color(can0_state), 0);
+            last_can0 = can0_state;
+        }
+        if (can1_state != last_can1) {
+            lv_obj_set_style_text_color(s_dot_can1, st_color(can1_state), 0);
+            last_can1 = can1_state;
         }
         if (wifi_ok != last_wifi_ok) {
             lv_obj_set_style_text_color(s_dot_wifi, wifi_ok ? CLR_GREEN : CLR_RED, 0);
