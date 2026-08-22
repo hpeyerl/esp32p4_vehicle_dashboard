@@ -32,6 +32,9 @@
 #include <stdio.h>
 #include <math.h>
 #include <cstring>
+#ifdef __linux__
+#include <sys/statvfs.h>   // read-only-root health check (Pi/CM3 build)
+#endif
 #ifdef BMS_HTTP
 #include "bms_data.h"
 #endif
@@ -81,11 +84,16 @@ static Meter s_bat_meter;
 static Meter s_pv_meter;
 static Meter s_pa_meter;
 
-#define SOC_TICKS 40
-#define PWR_TICKS 40
+#define SOC_TICKS 100
+#define PWR_TICKS 100
+#define MARK_OVER 12             // white marker overhang past each end of the comb band
+#define MARK_W    6              // white marker width (a touch wider than a tick)
 static lv_obj_t *s_arc_combs   = NULL;   // container for both comb arcs (single fade handle)
 static lv_obj_t *s_soc_tick[SOC_TICKS];  // SOC comb: fills bottom->top
 static lv_obj_t *s_pwr_tick[PWR_TICKS];  // power comb: center-zero, drive up / regen down
+static lv_obj_t *s_soc_mark    = NULL;   // longer white current-level marker (SOC)
+static lv_obj_t *s_pwr_mark    = NULL;   // longer white current-level marker (power)
+static lv_coord_t s_soc_cx, s_soc_cy, s_pwr_cx, s_pwr_cy;  // arc centers (for markers)
 static lv_obj_t *s_lbl_soc_pct = NULL;
 static lv_obj_t *s_lbl_range   = NULL;
 static lv_obj_t *s_lbl_pwr_val = NULL;
@@ -101,6 +109,7 @@ static lv_obj_t *s_lbl_trip    = NULL;
 static lv_obj_t *s_lbl_aux_v   = NULL;
 static lv_obj_t *s_dot_can     = NULL;
 static lv_obj_t *s_dot_wifi    = NULL;
+static lv_obj_t *s_dot_rw      = NULL;   // read-write-root warning (should be ro)
 static lv_obj_t *s_lbl_odo_val      = NULL;
 static lv_obj_t *s_lbl_trip_odo_val = NULL;
 
@@ -246,37 +255,63 @@ static void make_meter(Meter *m, lv_obj_t *parent,
     lv_obj_set_pos(m->lbl_val, cx - 20, cy + 16);
 }
 
-// Build `n` radial tick marks along a CW arc from a0 to a1 degrees (a1 may
-// exceed 360 to cross the 0° point), centered at (cx,cy) radius r. Each tick is
-// a thin rect of radial length `len` / tangential width `tw`, rotated to point
-// at the center. Unlit ticks (CLR_BORDER) form the track; the update loop
-// recolors them. Mirrors the meter-needle transform pattern. Stored in out[].
+// Angle (deg, CW) of comb tick `i` of `n` along a0..a1 (a1 may exceed 360).
+static float comb_angle(int i, int n, float a0, float a1)
+{
+    float t = (n > 1) ? (float)i / (float)(n - 1) : 0.0f;
+    return a0 + t * (a1 - a0);
+}
+
+// Position a rect `o` (size tw×len) centered at radius r / angle `ang` from
+// (cx,cy), rotated so its long axis is radial. Mirrors the meter-needle
+// transform pattern; reused for both comb ticks and the longer marker.
+static void place_radial(lv_obj_t *o, lv_coord_t cx, lv_coord_t cy, lv_coord_t r,
+                         lv_coord_t len, lv_coord_t tw, float ang)
+{
+    float rad = ang * (float)M_PI / 180.0f;
+    lv_coord_t x = cx + (lv_coord_t)(r * cosf(rad));
+    lv_coord_t y = cy + (lv_coord_t)(r * sinf(rad));
+    lv_obj_set_size(o, tw, len);
+    lv_obj_set_pos(o, x - tw / 2, y - len / 2);
+    lv_obj_set_style_transform_pivot_x(o, tw / 2, 0);
+    lv_obj_set_style_transform_pivot_y(o, len / 2, 0);
+    int a10 = (int)lroundf((ang - 90.0f) * 10.0f);   // 0.1° units, radial
+    a10 %= 3600; if (a10 < 0) a10 += 3600;
+    lv_obj_set_style_transform_angle(o, a10, 0);
+}
+
+// Build `n` radial tick marks along a CW arc a0..a1 (a1 may cross 0°) centered
+// at (cx,cy) radius r. Unlit ticks (CLR_BORDER) form the track; the update loop
+// recolors them. Stored in out[].
 static void make_comb(lv_obj_t *parent, lv_obj_t **out, int n,
                       lv_coord_t cx, lv_coord_t cy, lv_coord_t r,
                       lv_coord_t len, lv_coord_t tw, float a0, float a1)
 {
     for (int i = 0; i < n; i++) {
-        float t   = (n > 1) ? (float)i / (float)(n - 1) : 0.0f;
-        float ang = a0 + t * (a1 - a0);              // degrees, CW
-        float rad = ang * (float)M_PI / 180.0f;
-        lv_coord_t x = cx + (lv_coord_t)(r * cosf(rad));
-        lv_coord_t y = cy + (lv_coord_t)(r * sinf(rad));
         lv_obj_t *tk = lv_obj_create(parent);
-        lv_obj_set_size(tk, tw, len);
         lv_obj_set_style_border_width(tk, 0, 0);
         lv_obj_set_style_radius(tk, 1, 0);
         lv_obj_set_style_bg_opa(tk, LV_OPA_COVER, 0);
         lv_obj_set_style_bg_color(tk, CLR_BORDER, 0);   // start unlit
-        lv_obj_set_pos(tk, x - tw / 2, y - len / 2);
-        lv_obj_set_style_transform_pivot_x(tk, tw / 2, 0);
-        lv_obj_set_style_transform_pivot_y(tk, len / 2, 0);
-        int a10 = (int)lroundf((ang - 90.0f) * 10.0f); // 0.1° units, radial
-        a10 %= 3600; if (a10 < 0) a10 += 3600;
-        lv_obj_set_style_transform_angle(tk, a10, 0);
+        place_radial(tk, cx, cy, r, len, tw, comb_angle(i, n, a0, a1));
         lv_obj_clear_flag(tk, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_clear_flag(tk, LV_OBJ_FLAG_SCROLLABLE);
         out[i] = tk;
     }
+}
+
+// Create the longer white current-level marker (protrudes past both comb ends).
+static lv_obj_t *make_marker(lv_obj_t *parent)
+{
+    lv_obj_t *m = lv_obj_create(parent);
+    lv_obj_set_style_border_width(m, 0, 0);
+    lv_obj_set_style_radius(m, 1, 0);
+    lv_obj_set_style_bg_opa(m, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(m, CLR_WHITE, 0);
+    lv_obj_add_flag(m, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(m, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(m, LV_OBJ_FLAG_SCROLLABLE);
+    return m;
 }
 
 // Update needle angle for a meter.
@@ -431,9 +466,11 @@ void dashboard_ui_create(lv_display_t *disp)
     lv_obj_clear_flag(s_arc_combs, LV_OBJ_FLAG_SCROLLABLE);
 
     // SOC comb — radial ticks along the "(" arc. Unlit ticks form the track;
-    // the update lights ticks bottom->top with a single white current-level tick.
+    // update lights ticks bottom->top; a longer white marker rides the level.
+    s_soc_cx = soc_cx; s_soc_cy = soc_cy;
     make_comb(s_arc_combs, s_soc_tick, SOC_TICKS,
-              soc_cx, soc_cy, ARC_R, ARC_W, 5, ARC_START, ARC_END);
+              soc_cx, soc_cy, ARC_R, ARC_W, 3, ARC_START, ARC_END);
+    s_soc_mark = make_marker(s_arc_combs);
 
     // SOC % label — centered inside the bottom of the arc stroke
     // RANGE label — to the left of the arc at the same height
@@ -441,8 +478,8 @@ void dashboard_ui_create(lv_display_t *disp)
         float a = ARC_START * (float)M_PI / 180.0f;
         lv_coord_t bx = soc_cx + (lv_coord_t)(ARC_R * cosf(a));
         lv_coord_t by = soc_cy + (lv_coord_t)(ARC_R * sinf(a));
-        s_lbl_soc_pct = make_label(scr, "0%", CLR_CYAN, &lv_font_montserrat_18);
-        lv_obj_set_pos(s_lbl_soc_pct, bx - 25, by - 110);
+        s_lbl_soc_pct = make_label(scr, "0%", CLR_CYAN, &lv_font_montserrat_24);
+        lv_obj_set_pos(s_lbl_soc_pct, bx - 32, by - 116);
     }
 
     // ── Center ────────────────────────────────────────────────────────────
@@ -507,18 +544,20 @@ void dashboard_ui_create(lv_display_t *disp)
 
     // Power comb — radial ticks along the ")" arc. a0..a0+160 crosses 0° (=360°)
     // at the midpoint, so tick PWR_TICKS/2 is the center/zero: drive lights
-    // upward (orange), regen downward (green), with a white current-level tick.
+    // upward (orange), regen downward (green); a longer white marker rides it.
+    s_pwr_cx = pwr_cx; s_pwr_cy = pwr_cy;
     make_comb(s_arc_combs, s_pwr_tick, PWR_TICKS,
-              pwr_cx, pwr_cy, ARC_R, ARC_W, 5,
+              pwr_cx, pwr_cy, ARC_R, ARC_W, 3,
               PWR_ARC_START, PWR_ARC_START + 160);
+    s_pwr_mark = make_marker(s_arc_combs);
 
     // Power labels — at the bottom endpoint of the arc (PWR_ARC_END angle)
     {
         float a = PWR_ARC_END * (float)M_PI / 180.0f;
         lv_coord_t bx = pwr_cx + (lv_coord_t)(ARC_R * cosf(a));
         lv_coord_t by = pwr_cy + (lv_coord_t)(ARC_R * sinf(a));
-        s_lbl_pwr_val = make_label(scr, "+0", CLR_CYAN, &lv_font_montserrat_18);
-        lv_obj_set_pos(s_lbl_pwr_val, bx - 25, by - 110);
+        s_lbl_pwr_val = make_label(scr, "+0", CLR_CYAN, &lv_font_montserrat_24);
+        lv_obj_set_pos(s_lbl_pwr_val, bx - 32, by - 116);
         lv_obj_t *kw_hdr = make_label(scr, "kW", CLR_TEXT_DIM,
                                        &lv_font_montserrat_10);
         lv_obj_set_pos(kw_hdr, bx - 5, by - 130);
@@ -583,20 +622,20 @@ void dashboard_ui_create(lv_display_t *disp)
                               &lv_font_montserrat_48);
     lv_obj_align(s_lbl_aux_v, LV_ALIGN_TOP_LEFT, 0, 226);
 
-    // ── CAN + WiFi status indicators (bottom of right panel, centered) ───────
+    // ── CAN + WiFi + rw-root status — a row under the 🏠 ◀ ▶ nav cluster ──────
+    // Nav buttons are RIGHT_MID at xoff -168/-88/-8; line these up beneath them.
     {
-        lv_coord_t panel_cx = W - RIGHT_W / 2;  // horizontal center of right panel
-        lv_coord_t row_y    = MAIN_H - 42;      // near bottom of main area
+        const lv_coord_t sy = 50;   // below the 64px button row
+        s_dot_can = make_label(scr, LV_SYMBOL_LOOP, CLR_RED, &lv_font_montserrat_18);
+        lv_obj_align(s_dot_can, LV_ALIGN_RIGHT_MID, -192, sy);
 
-        // CAN indicator — loop symbol, colored red/green
-        lv_coord_t can_cx = panel_cx - 28;
-        s_dot_can = make_label(scr, LV_SYMBOL_LOOP, CLR_RED, &lv_font_montserrat_14);
-        lv_obj_set_pos(s_dot_can, can_cx - 10, row_y);
+        s_dot_wifi = make_label(scr, LV_SYMBOL_WIFI, CLR_RED, &lv_font_montserrat_18);
+        lv_obj_align(s_dot_wifi, LV_ALIGN_RIGHT_MID, -112, sy);
 
-        // WiFi indicator — symbol glyph, colored red/green
-        lv_coord_t wifi_cx = panel_cx + 28;
-        s_dot_wifi = make_label(scr, LV_SYMBOL_WIFI, CLR_RED, &lv_font_montserrat_14);
-        lv_obj_set_pos(s_dot_wifi, wifi_cx - 10, row_y);
+        // read-write-root warning (⚠) — hidden unless / is mounted rw (should be ro)
+        s_dot_rw = make_label(scr, LV_SYMBOL_WARNING, CLR_AMBER, &lv_font_montserrat_18);
+        lv_obj_align(s_dot_rw, LV_ALIGN_RIGHT_MID, -32, sy);
+        lv_obj_add_flag(s_dot_rw, LV_OBJ_FLAG_HIDDEN);
     }
 
     // ── PRND in right panel (above status indicators) ────────────────────
@@ -831,10 +870,16 @@ void dashboard_ui_update(const DashData *d)
     int soc_lit = (int)lroundf(soc_f * SOC_TICKS);
     if (soc_lit != last_soc_lit ||
         memcmp(&soc_col, &last_soc_col, sizeof(lv_color_t)) != 0) {
-        for (int i = 0; i < SOC_TICKS; i++) {
-            lv_color_t c = (i < soc_lit) ? soc_col : CLR_BORDER;
-            if (i == soc_lit - 1) c = CLR_WHITE;   // current-level marker
-            lv_obj_set_style_bg_color(s_soc_tick[i], c, 0);
+        for (int i = 0; i < SOC_TICKS; i++)
+            lv_obj_set_style_bg_color(s_soc_tick[i],
+                                      (i < soc_lit) ? soc_col : CLR_BORDER, 0);
+        if (soc_lit > 0) {   // white marker rides the top of the fill
+            place_radial(s_soc_mark, s_soc_cx, s_soc_cy, ARC_R,
+                         ARC_W + 2 * MARK_OVER, MARK_W,
+                         comb_angle(soc_lit - 1, SOC_TICKS, ARC_START, ARC_END));
+            lv_obj_clear_flag(s_soc_mark, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_soc_mark, LV_OBJ_FLAG_HIDDEN);
         }
         lv_obj_set_style_text_color(s_lbl_soc_pct, soc_col, 0);
         last_soc_lit = soc_lit;
@@ -925,17 +970,21 @@ void dashboard_ui_update(const DashData *d)
         memcmp(&pwr_col, &last_pwr_col, sizeof(lv_color_t)) != 0) {
         for (int i = 0; i < PWR_TICKS; i++)
             lv_obj_set_style_bg_color(s_pwr_tick[i], CLR_BORDER, 0);
+        int mk;
         if (kw >= 0.0f) {                                // drive: up from center
             for (int i = 0; i < pwr_k; i++)
                 lv_obj_set_style_bg_color(s_pwr_tick[PWR_HALF - 1 - i], pwr_col, 0);
-            lv_obj_set_style_bg_color(
-                s_pwr_tick[pwr_k > 0 ? PWR_HALF - pwr_k : PWR_HALF - 1], CLR_WHITE, 0);
+            mk = pwr_k > 0 ? PWR_HALF - pwr_k : PWR_HALF - 1;
         } else {                                         // regen: down from center
             for (int i = 0; i < pwr_k; i++)
                 lv_obj_set_style_bg_color(s_pwr_tick[PWR_HALF + i], pwr_col, 0);
-            lv_obj_set_style_bg_color(
-                s_pwr_tick[pwr_k > 0 ? PWR_HALF + pwr_k - 1 : PWR_HALF], CLR_WHITE, 0);
+            mk = pwr_k > 0 ? PWR_HALF + pwr_k - 1 : PWR_HALF;
         }
+        // white marker rides the current level (sits at center when idle)
+        place_radial(s_pwr_mark, s_pwr_cx, s_pwr_cy, ARC_R,
+                     ARC_W + 2 * MARK_OVER, MARK_W,
+                     comb_angle(mk, PWR_TICKS, PWR_ARC_START, PWR_ARC_START + 160));
+        lv_obj_clear_flag(s_pwr_mark, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_style_text_color(s_lbl_pwr_val, pwr_col, 0);
         last_pwr_signed = pwr_signed;
         last_pwr_col    = pwr_col;
@@ -984,6 +1033,24 @@ void dashboard_ui_update(const DashData *d)
             lv_obj_set_style_text_color(s_dot_wifi, wifi_ok ? CLR_GREEN : CLR_RED, 0);
             last_wifi_ok = wifi_ok;
         }
+#ifdef __linux__
+        // read-only-root health: warn (⚠) if / is mounted read-write (should be ro)
+        {
+            static int32_t  last_rw    = -1;
+            static uint32_t rw_next_ms = 0;
+            uint32_t t = lv_tick_get();
+            if (s_dot_rw && (int32_t)(t - rw_next_ms) >= 0) {
+                rw_next_ms = t + 2000;   // poll every 2s
+                struct statvfs vfs;
+                int rw = (statvfs("/", &vfs) == 0) ? !(vfs.f_flag & ST_RDONLY) : 0;
+                if (rw != last_rw) {
+                    if (rw) lv_obj_clear_flag(s_dot_rw, LV_OBJ_FLAG_HIDDEN);
+                    else    lv_obj_add_flag  (s_dot_rw, LV_OBJ_FLAG_HIDDEN);
+                    last_rw = rw;
+                }
+            }
+        }
+#endif
     }
 
     // ── Cruise control ────────────────────────────────────────────────────
