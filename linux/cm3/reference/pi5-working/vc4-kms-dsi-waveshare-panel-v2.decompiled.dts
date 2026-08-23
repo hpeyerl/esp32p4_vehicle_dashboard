@@ -1,0 +1,202 @@
+/dts-v1/;
+
+/ {
+	compatible = "brcm,bcm2835";
+
+	fragment@0 {
+		target = <0xffffffff>;
+		phandle = <0x07>;
+
+		__overlay__ {
+			#address-cells = <0x01>;
+			#size-cells = <0x00>;
+			status = "okay";
+
+			display_mcu@45 {
+				compatible = "waveshare,touchscreen-panel-regulator";
+				reg = <0x45>;
+				gpio-controller;
+				#gpio-cells = <0x02>;
+				enable-gpio = <0x01 0x02 0x00>;
+				phandle = <0x01>;
+			};
+
+			goodix@5d {
+				compatible = "goodix,gt9271";
+				reg = <0x5d>;
+				reset-gpio = <0x01 0x09 0x00>;
+				phandle = <0x05>;
+			};
+		};
+	};
+
+	fragment@1 {
+		target = <0xffffffff>;
+		phandle = <0x06>;
+
+		__overlay__ {
+			#address-cells = <0x01>;
+			#size-cells = <0x00>;
+			status = "okay";
+
+			port {
+
+				endpoint {
+					remote-endpoint = <0x02>;
+					phandle = <0x03>;
+				};
+			};
+
+			dsi_panel@0 {
+				reg = <0x00>;
+				compatible = "waveshare,10.1-dsi-touch-a";
+				reset-gpio = <0x01 0x01 0x00>;
+				iovcc-gpio = <0x01 0x04 0x00>;
+				avdd-gpio = <0x01 0x00 0x00>;
+				backlight = <0x01>;
+				phandle = <0x04>;
+
+				port {
+
+					endpoint {
+						remote-endpoint = <0x03>;
+						phandle = <0x02>;
+					};
+				};
+			};
+		};
+	};
+
+	fragment@2 {
+		target = <0xffffffff>;
+
+		__overlay__ {
+			status = "okay";
+		};
+	};
+
+	fragment@3 {
+		target = <0xffffffff>;
+
+		__overlay__ {
+			status = "okay";
+		};
+	};
+
+	__overrides__ {
+		3_4_inch_c = [00 00 00 04 63 6f 6d 70 61 74 69 62 6c 65 3d 77 61 76 65 73 68 61 72 65 2c 33 2e 34 2d 64 73 69 2d 74 6f 75 63 68 2d 63 00];
+		4_0_inch_a = [00 00 00 04 63 6f 6d 70 61 74 69 62 6c 65 3d 77 61 76 65 73 68 61 72 65 2c 34 2e 30 2d 64 73 69 2d 74 6f 75 63 68 2d 61 00];
+		4_0_inch_c = [00 00 00 04 63 6f 6d 70 61 74 69 62 6c 65 3d 77 61 76 65 73 68 61 72 65 2c 34 2e 30 2d 64 73 69 2d 74 6f 75 63 68 2d 63 00];
+		4_3_inch_a = [00 00 00 04 63 6f 6d 70 61 74 69 62 6c 65 3d 77 61 76 65 73 68 61 72 65 2c 34 2e 33 2d 64 73 69 2d 74 6f 75 63 68 2d 61 00];
+		5_0_inch_a = [00 00 00 04 63 6f 6d 70 61 74 69 62 6c 65 3d 77 61 76 65 73 68 61 72 65 2c 35 2e 30 2d 64 73 69 2d 74 6f 75 63 68 2d 61 00];
+		5_5_inch_a = [00 00 00 04 63 6f 6d 70 61 74 69 62 6c 65 3d 77 61 76 65 73 68 61 72 65 2c 35 2e 35 2d 64 73 69 2d 74 6f 75 63 68 2d 61 00];
+		7_0_inch_a = [00 00 00 04 63 6f 6d 70 61 74 69 62 6c 65 3d 77 61 76 65 73 68 61 72 65 2c 37 2e 30 2d 64 73 69 2d 74 6f 75 63 68 2d 61 00];
+		7_0_inch_b = [00 00 00 04 63 6f 6d 70 61 74 69 62 6c 65 3d 77 61 76 65 73 68 61 72 65 2c 37 2e 30 2d 64 73 69 2d 74 6f 75 63 68 2d 62 00];
+		7_0_inch_c = [00 00 00 04 63 6f 6d 70 61 74 69 62 6c 65 3d 77 61 76 65 73 68 61 72 65 2c 37 2e 30 2d 64 73 69 2d 74 6f 75 63 68 2d 63 00];
+		8_0_inch_a = [00 00 00 04 63 6f 6d 70 61 74 69 62 6c 65 3d 77 61 76 65 73 68 61 72 65 2c 38 2e 30 2d 64 73 69 2d 74 6f 75 63 68 2d 61 00];
+		8_0_inch_a_4lane = [00 00 00 04 63 6f 6d 70 61 74 69 62 6c 65 3d 77 61 76 65 73 68 61 72 65 2c 38 2e 30 2d 64 73 69 2d 74 6f 75 63 68 2d 61 2d 34 6c 61 6e 65 00];
+		8_8_inch_a = [00 00 00 04 63 6f 6d 70 61 74 69 62 6c 65 3d 77 61 76 65 73 68 61 72 65 2c 38 2e 38 2d 64 73 69 2d 74 6f 75 63 68 2d 61 00 00 00 00 01 70 72 65 2d 70 6f 77 65 72 2d 6f 6e 3f 00];
+		9_0_inch_b = <0x04 0x636f6d70 0x61746962 0x6c653d77 0x61766573 0x68617265 0x2c392e30 0x2d647369 0x2d746f75 0x63682d62 0x00 0x5746f75 0x63687363 0x7265656e 0x2d696e76 0x65727465 0x642d7800>;
+		9_0_inch_b_4lane = [00 00 00 04 63 6f 6d 70 61 74 69 62 6c 65 3d 77 61 76 65 73 68 61 72 65 2c 39 2e 30 2d 64 73 69 2d 74 6f 75 63 68 2d 62 2c 34 6c 61 6e 65 00 00 00 00 05 74 6f 75 63 68 73 63 72 65 65 6e 2d 69 6e 76 65 72 74 65 64 2d 78 00];
+		10_1_inch_a = [00 00 00 04 63 6f 6d 70 61 74 69 62 6c 65 3d 77 61 76 65 73 68 61 72 65 2c 31 30 2e 31 2d 64 73 69 2d 74 6f 75 63 68 2d 61 00];
+		10_1_inch_a_4lane = <0x04 0x636f6d70 0x61746962 0x6c653d77 0x61766573 0x68617265 0x2c31302e 0x312d6473 0x692d746f 0x7563682d 0x612d346c 0x616e6500>;
+		10_1_inch_b = [00 00 00 04 63 6f 6d 70 61 74 69 62 6c 65 3d 77 61 76 65 73 68 61 72 65 2c 31 30 2e 31 2d 64 73 69 2d 74 6f 75 63 68 2d 62 00 00 00 00 05 74 6f 75 63 68 73 63 72 65 65 6e 2d 69 6e 76 65 72 74 65 64 2d 79 00];
+		10_1_inch_b_4lane = [00 00 00 04 63 6f 6d 70 61 74 69 62 6c 65 3d 77 61 76 65 73 68 61 72 65 2c 31 30 2e 31 2d 64 73 69 2d 74 6f 75 63 68 2d 62 2c 34 6c 61 6e 65 00 00 00 00 05 74 6f 75 63 68 73 63 72 65 65 6e 2d 69 6e 76 65 72 74 65 64 2d 79 00];
+		12_3_inch_a_4lane = [00 00 00 04 63 6f 6d 70 61 74 69 62 6c 65 3d 77 61 76 65 73 68 61 72 65 2c 31 32 2e 33 2d 64 73 69 2d 74 6f 75 63 68 2d 61 2c 34 6c 61 6e 65 00 00 00 00 05 74 6f 75 63 68 73 63 72 65 65 6e 2d 73 77 61 70 70 65 64 2d 78 2d 79 00 00 00 00 05 74 6f 75 63 68 73 63 72 65 65 6e 2d 69 6e 76 65 72 74 65 64 2d 79 00];
+		disable_touch = <0x05 0x73746174 0x75733d64 0x69736162 0x6c656400>;
+		invx = <0x05 0x746f7563 0x68736372 0x65656e2d 0x696e7665 0x72746564 0x2d783f00>;
+		invy = <0x05 0x746f7563 0x68736372 0x65656e2d 0x696e7665 0x72746564 0x2d793f00>;
+		swapxy = [00 00 00 05 74 6f 75 63 68 73 63 72 65 65 6e 2d 73 77 61 70 70 65 64 2d 78 2d 79 3f 00];
+		dsi0 = <0x06 0x74617267 0x65743a30 0x3d00ffff 0xffff0000 0x77461 0x72676574 0x3a303d00 0xffffffff>;
+	};
+
+	__symbols__ {
+		i2c_frag = "/fragment@0";
+		display_mcu = "/fragment@0/__overlay__/display_mcu@45";
+		touch = "/fragment@0/__overlay__/goodix@5d";
+		dsi_frag = "/fragment@1";
+		dsi_out = "/fragment@1/__overlay__/port/endpoint";
+		dsi_panel = "/fragment@1/__overlay__/dsi_panel@0";
+		panel_in = "/fragment@1/__overlay__/dsi_panel@0/port/endpoint";
+	};
+
+	__fixups__ {
+		i2c_csi_dsi = "/fragment@0:target:0";
+		dsi1 = "/fragment@1:target:0";
+		i2c0if = "/fragment@2:target:0";
+		i2c0mux = "/fragment@3:target:0";
+		dsi0 = "/__overrides__:dsi0:14";
+		i2c_csi_dsi0 = "/__overrides__:dsi0:32";
+	};
+
+	__local_fixups__ {
+
+		fragment@0 {
+
+			__overlay__ {
+
+				display_mcu@45 {
+					enable-gpio = <0x00>;
+				};
+
+				goodix@5d {
+					reset-gpio = <0x00>;
+				};
+			};
+		};
+
+		fragment@1 {
+
+			__overlay__ {
+
+				port {
+
+					endpoint {
+						remote-endpoint = <0x00>;
+					};
+				};
+
+				dsi_panel@0 {
+					reset-gpio = <0x00>;
+					iovcc-gpio = <0x00>;
+					avdd-gpio = <0x00>;
+					backlight = <0x00>;
+
+					port {
+
+						endpoint {
+							remote-endpoint = <0x00>;
+						};
+					};
+				};
+			};
+		};
+
+		__overrides__ {
+			3_4_inch_c = <0x00>;
+			4_0_inch_a = <0x00>;
+			4_0_inch_c = <0x00>;
+			4_3_inch_a = <0x00>;
+			5_0_inch_a = <0x00>;
+			5_5_inch_a = <0x00>;
+			7_0_inch_a = <0x00>;
+			7_0_inch_b = <0x00>;
+			7_0_inch_c = <0x00>;
+			8_0_inch_a = <0x00>;
+			8_0_inch_a_4lane = <0x00>;
+			8_8_inch_a = <0x00 0x29>;
+			9_0_inch_b = <0x00 0x29>;
+			9_0_inch_b_4lane = <0x00 0x2f>;
+			10_1_inch_a = <0x00>;
+			10_1_inch_a_4lane = <0x00>;
+			10_1_inch_b = <0x00 0x2a>;
+			10_1_inch_b_4lane = <0x00 0x30>;
+			12_3_inch_a_4lane = <0x00 0x30 0x4c>;
+			disable_touch = <0x00>;
+			invx = <0x00>;
+			invy = <0x00>;
+			swapxy = <0x00>;
+			dsi0 = <0x00 0x12>;
+		};
+	};
+};
