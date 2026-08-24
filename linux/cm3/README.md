@@ -1,5 +1,21 @@
 # CM3 Debian bring-up
 
+> **STATUS (2026-08-24): this is a HISTORICAL bring-up plan, largely SUPERSEDED.**
+> Much of what reads below as future/open is now done. Current reality:
+> - **Display: DONE** — HX8399 lights on DISP1/dsi1, cold-boot + STR both working.
+> - **CAN: DONE** — dual MCP2515 (can0/can1), overlay pre-merged into the base DTB.
+> - **Dashboard app: RUNS** as `dashboard.service`, live CAN.
+> - **Read-only root: DONE** (tmpfs overlay; eMMC `ro`).
+> - **Touch: NOT working yet, but ROOT-CAUSED.** The GT911 needs a reset pulse on
+>   panel-MCU(0x45) GPIO line 9, which nothing on the CM3 currently does. The
+>   proven-working Pi5 config + the full fix are captured in
+>   [`reference/pi5-working/`](reference/pi5-working/) — **read that, not the
+>   "open questions" below**, which are stale (esp. Q2 touch INT/RST — there is no
+>   INT; it's reset-only).
+>
+> Kept for the flashing runbook and the DSI/CAN research trail. Don't treat the
+> "hard rung" / "open questions" framing as current.
+
 Getting the dashboard onto the **production compute**: a Radxa **CM3** (RK3566
 quad-core, **2 GB RAM / 16 GB eMMC / WiFi**) on a Raspberry Pi **CM4 IO** board.
 Chosen over the Pi 5 because it can **suspend-to-RAM** (instant-on) and sips ~2–3 W.
