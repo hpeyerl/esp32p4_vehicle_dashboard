@@ -1346,7 +1346,7 @@ static lv_obj_t *s_bms_celllbl[BMS_UI_MODS][BMS_UI_CELLS];
 
 // Physical mounting in the truck: which modules sit at the FRONT (rest = rear),
 // so front/rear thermal groups are visually separable. 0-based (idx 0 = M1).
-// Front = M1, M4, M5 (M5 provisional — 3rd front module pending confirmation).
+// Front = M1, M4, M5 (all confirmed 2026-08-26).
 // Edit this array to re-map front vs rear.
 static const bool bms_mod_front[BMS_UI_MODS] =
     { true, false, false, true, true, false, false, false };
