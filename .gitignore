@@ -18,6 +18,7 @@ CONTEXT.md
 
 # --- Linux / CMake build (pi5 port) ---
 build/
+build-arm64/
 *.o
 *.a
 *.so
